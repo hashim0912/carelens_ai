@@ -1,0 +1,74 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  DOCTOR
+  STAFF
+}
+
+enum Sex {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum ScanStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(STAFF)
+  scans        Scan[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Patient {
+  id          String   @id @default(uuid())
+  name        String
+  dateOfBirth DateTime?
+  sex         Sex?
+  scans       Scan[]
+  createdAt   DateTime @default(now())
+}
+
+model Scan {
+  id          String       @id @default(uuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id])
+  patientId   String?
+  patient     Patient?     @relation(fields: [patientId], references: [id])
+  modelId     String
+  status      ScanStatus   @default(PENDING)
+  predictions Prediction?
+  /** Domain-specific intake answers (context only; never fed to the model). */
+  clinicalContext Json?
+  /** Cached AI-generated report content (see POST /reports). */
+  report      Json?
+  createdAt   DateTime     @default(now())
+}
+
+model Prediction {
+  id         String   @id @default(uuid())
+  scanId     String   @unique
+  scan       Scan     @relation(fields: [scanId], references: [id])
+  modelId    String
+  label      String
+  confidence Float
+  details    Json
+  createdAt  DateTime @default(now())
+}

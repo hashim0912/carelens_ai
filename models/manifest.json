@@ -1,0 +1,42 @@
+﻿{
+    "source":  "extracted from decompiled CareLens/Vital Scan APK (Desktop\\\\ProjectCode\\\\app\\\\src\\\\main\\\\assets\\\\flutter_assets\\\\assets)",
+    "extracted_at":  "2026-10-11T14:30:29.3645559+05:00",
+    "integrity":  "sha256 verified against source",
+    "models":  [
+                   {
+                       "name":  "brain_model.tflite",
+                       "size_bytes":  2090332,
+                       "sha256":  "5F5E2DE020ECA6286D1CD3483908C8BF1BC50410592315CD7077875A9BF222BD",
+                       "tflite_version":  "TFL3"
+                   },
+                   {
+                       "name":  "model.tflite",
+                       "size_bytes":  2090332,
+                       "sha256":  "3D9D059BD54A6E3F1F90446CBF9B5A03A22BE2CC49CF2D1B1801F85709F3CCCE",
+                       "tflite_version":  "TFL3"
+                   },
+                   {
+                       "name":  "model_unquant.tflite",
+                       "size_bytes":  2090332,
+                       "sha256":  "8934B2A884E68D69DD7B829BDABA4871FB7F1D883E15AD9515913825BF8E7F22",
+                       "tflite_version":  "TFL3"
+                   },
+                   {
+                       "name":  "newPneumoniaModel.tflite",
+                       "size_bytes":  2090732,
+                       "sha256":  "CB5D21D3D539400EE7B0826701FD300BAB0939D7CFA9F57DBF62F5DF195808C3",
+                       "tflite_version":  "TFL3"
+                   },
+                   {
+                       "name":  "new_model.tflite",
+                       "size_bytes":  2091132,
+                       "sha256":  "35257CFB9B4F073DB1BB388A712A2995A0A2EF864D655BF7659456DABCD1598B",
+                       "tflite_version":  "TFL3"
+                   }
+               ],
+    "notes":  [
+                  "No class labels are embedded in the .tflite files (labels lived in the original Dart source, which is unavailable).",
+                  "Input/output tensor shapes will be parsed when the inference service runs these models (P2).",
+                  "Filenames suggest: brain_model.tflite = brain-tumor classifier; newPneumoniaModel.tflite = pneumonia classifier; model/model_unquant/new_model = classifier variants (unquant = float weights)."
+              ]
+}

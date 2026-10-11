@@ -1,0 +1,53 @@
+{
+  "name": "@carelens/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "dev": "nest start --watch",
+    "test": "node --import tsx --test test/image-safety.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:seed": "tsx prisma/seed.ts",
+    "prisma:generate:sqlite": "prisma generate --schema prisma/schema.sqlite.prisma",
+    "prisma:push:sqlite": "prisma db push --schema prisma/schema.sqlite.prisma",
+    "db:local": "pnpm prisma:generate:sqlite && pnpm prisma:push:sqlite && pnpm prisma:seed",
+    "dev:local": "pnpm db:local && nest start --watch"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@carelens/config": "workspace:*",
+    "@carelens/ml": "workspace:*",
+    "@carelens/shared": "workspace:*",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/jwt": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@prisma/client": "^6.4.1",
+    "bcryptjs": "^2.4.3",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "pdfkit": "^0.20.2",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/express": "^5.0.0",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.10.0",
+    "@types/pdfkit": "^0.17.6",
+    "prisma": "^6.4.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}

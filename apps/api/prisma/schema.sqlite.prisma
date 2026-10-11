@@ -1,0 +1,58 @@
+// SQLite development profile. SQLite has no native enum support, so the
+// Postgres enums (Role/Sex/ScanStatus) are represented as String here.
+// Use with: pnpm --filter @carelens/api prisma:push:sqlite
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("STAFF")
+  scans        Scan[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Patient {
+  id          String   @id @default(uuid())
+  name        String
+  dateOfBirth DateTime?
+  sex         String?
+  scans       Scan[]
+  createdAt   DateTime @default(now())
+}
+
+model Scan {
+  id          String       @id @default(uuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id])
+  patientId   String?
+  patient     Patient?     @relation(fields: [patientId], references: [id])
+  modelId     String
+  status      String       @default("PENDING")
+  predictions Prediction?
+  /** Domain-specific intake answers (context only; never fed to the model). */
+  clinicalContext Json?
+  /** Cached AI-generated report content (see POST /reports). */
+  report      Json?
+  createdAt   DateTime     @default(now())
+}
+
+model Prediction {
+  id         String   @id @default(uuid())
+  scanId     String   @unique
+  scan       Scan     @relation(fields: [scanId], references: [id])
+  modelId    String
+  label      String
+  confidence Float
+  details    Json
+  createdAt  DateTime @default(now())
+}

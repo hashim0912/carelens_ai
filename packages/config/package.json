@@ -1,0 +1,10 @@
+{
+  "name": "@carelens/config",
+  "version": "0.0.0",
+  "private": true,
+  "files": ["ts", "eslint"],
+  "exports": {
+    "./ts/*": "./ts/*",
+    "./eslint/*": "./eslint/*"
+  }
+}

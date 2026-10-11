@@ -1,0 +1,8 @@
+{
+  "extends": "@carelens/config/ts/base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"]
+}

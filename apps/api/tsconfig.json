@@ -1,0 +1,16 @@
+{
+  "extends": "@carelens/config/ts/node.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "outDir": "dist",
+    "rootDir": "src",
+    "noEmit": false,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "esModuleInterop": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

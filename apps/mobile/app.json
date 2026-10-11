@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "CareLens AI",
+    "slug": "carelens-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "carelens",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "CareLens AI needs access to your photos to analyze medical images."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "tsconfigPaths": true
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ai.carelens.mobile"
+    },
+    "android": {
+      "package": "ai.carelens.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#0f172a"
+      }
+    },
+    "extra": {
+      "apiUrl": "http://10.0.2.2:3000/api",
+      "inferenceUrl": "http://10.0.2.2:8001"
+    }
+  }
+}

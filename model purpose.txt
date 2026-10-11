@@ -1,0 +1,18 @@
+file	registry id	Domain / purpose	Output classes	Measured
+newPneumoniaModel.tflite	pneumonia	Chest X-ray → pneumonia type. The only model the original app actually shipped/used (its UI showed "Pneumonia Detected").	3: NORMAL, BACTERIAL_PNEUMONIA, VIRAL_PNEUMONIA	~40% (near chance)
+model.tflite	model	Chest X-ray → pneumonia yes/no. Binary classifier (quantized-ish).	2: NORMAL, PNEUMONIA	~60%
+model_unquant.tflite	model_unquant	Same binary pneumonia task as model.tflite, but the unquantized weights (float32). Same architecture, kept as the "high precision" twin; in practice it behaves almost identically.	2: NORMAL, PNEUMONIA	~50%
+brain_model.tflite	brain	Brain MRI → tumor yes/no.	2: no_tumor, tumor	unverified
+new_model.tflite	new_model	Brain MRI → tumor type (4-way classification).	4: glioma, meningioma, pituitary, no_tumor	unverified
+How they group
+- Chest / pneumonia: pneumonia (3-class), plus model + model_unquant (2-class binary, quantized vs. non-quantized of the same design).
+- Brain / MRI: brain (binary tumor) and new_model (4-class tumor type).
+Important context
+- The original APK referenced only newPneumoniaModel.tflite; the other four were bundled but unused leftovers.
+- Class names are inferred (no label metadata shipped) — only the output counts are verified by running them. So e.g. "BACTERIAL/VIRAL" mapping is an assumption.
+- On real labeled X-rays the weights are weak (40–60%), and the saliency showed the chest models don't localize the lungs — so their intended purpose is pneumonia detection, but the extracted weights aren't clinically reliable.
+Practical mapping for the app
+- Chest X-ray upload → use pneumonia (or model for a simple yes/no).
+- Brain MRI upload → use brain (yes/no) or new_model (tumor type).
+- The other models on the wrong domain produce meaningless output (that's why brain/new_model fired on your chest X-ray).
+Want me to add a domain field ("chest"/"brain") to the model registry so the UI groups/validates models by body part?

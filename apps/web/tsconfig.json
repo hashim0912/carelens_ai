@@ -1,0 +1,10 @@
+{
+  "extends": "@carelens/config/ts/react.json",
+  "compilerOptions": {
+    "types": ["vite/client"],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src"]
+}

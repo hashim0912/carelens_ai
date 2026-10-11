@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# Env / secrets (keep the example, never the real file)
+.env
+.env.*
+!.env.example
+
+# Local databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

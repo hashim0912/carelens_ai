@@ -1,0 +1,27 @@
+{
+  "name": "@carelens/ml",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test test/validation.test.mjs test/clinical.test.mjs test/report.test.mjs test/groq.test.mjs",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "@carelens/config": "workspace:*",
+    "@carelens/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

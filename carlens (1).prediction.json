@@ -1,0 +1,120 @@
+﻿{
+    "image":  "carlens (1).jfif",
+    "input":  {
+                  "dtype":  "float32",
+                  "shape":  "1x224x224x3",
+                  "preprocessing":  "pixel / 127.5 - 1 ([-1,1])"
+              },
+    "models":  {
+                   "pneumonia":  {
+                                     "verdict":  "BACTERIAL_PNEUMONIA",
+                                     "confidence":  0.681118,
+                                     "accuracy":  "~40% measured (near chance)",
+                                     "scores":  [
+                                                    {
+                                                        "label":  "BACTERIAL_PNEUMONIA",
+                                                        "confidence":  0.681118
+                                                    },
+                                                    {
+                                                        "label":  "NORMAL",
+                                                        "confidence":  0.256969
+                                                    },
+                                                    {
+                                                        "label":  "VIRAL_PNEUMONIA",
+                                                        "confidence":  0.061914
+                                                    }
+                                                ],
+                                     "raw_first":  [
+                                                       0.256969,
+                                                       0.681118,
+                                                       0.061914
+                                                   ]
+                                 },
+                   "model":  {
+                                 "verdict":  "NORMAL",
+                                 "confidence":  0.999905,
+                                 "accuracy":  "~60% measured",
+                                 "scores":  [
+                                                {
+                                                    "label":  "NORMAL",
+                                                    "confidence":  0.999905
+                                                },
+                                                {
+                                                    "label":  "PNEUMONIA",
+                                                    "confidence":  0.000095
+                                                }
+                                            ],
+                                 "raw_first":  [
+                                                   0.999905,
+                                                   0.000095
+                                               ]
+                             },
+                   "model_unquant":  {
+                                         "verdict":  "NORMAL",
+                                         "confidence":  0.95326,
+                                         "accuracy":  "~50% measured (near chance)",
+                                         "scores":  [
+                                                        {
+                                                            "label":  "NORMAL",
+                                                            "confidence":  0.95326
+                                                        },
+                                                        {
+                                                            "label":  "PNEUMONIA",
+                                                            "confidence":  0.04674
+                                                        }
+                                                    ],
+                                         "raw_first":  [
+                                                           0.95326,
+                                                           0.04674
+                                                       ]
+                                     },
+                   "brain":  {
+                                 "verdict":  "tumor",
+                                 "confidence":  0.85577,
+                                 "accuracy":  "unverified (brain MRI domain)",
+                                 "scores":  [
+                                                {
+                                                    "label":  "tumor",
+                                                    "confidence":  0.85577
+                                                },
+                                                {
+                                                    "label":  "no_tumor",
+                                                    "confidence":  0.14423
+                                                }
+                                            ],
+                                 "raw_first":  [
+                                                   0.14423,
+                                                   0.85577
+                                               ]
+                             },
+                   "new_model":  {
+                                     "verdict":  "meningioma",
+                                     "confidence":  0.999999,
+                                     "accuracy":  "unverified (brain MRI domain)",
+                                     "scores":  [
+                                                    {
+                                                        "label":  "meningioma",
+                                                        "confidence":  0.999999
+                                                    },
+                                                    {
+                                                        "label":  "pituitary",
+                                                        "confidence":  1E-06
+                                                    },
+                                                    {
+                                                        "label":  "no_tumor",
+                                                        "confidence":  0.0
+                                                    },
+                                                    {
+                                                        "label":  "glioma",
+                                                        "confidence":  0.0
+                                                    }
+                                                ],
+                                     "raw_first":  [
+                                                       0.0,
+                                                       0.999999,
+                                                       1E-06,
+                                                       0.0
+                                                   ]
+                                 }
+               }
+}
