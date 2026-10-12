@@ -268,15 +268,20 @@ export interface InferenceResult {
   disclaimer?: string;
   input_analysis?: ImageValidation;
   low_confidence_domain?: boolean;
+  saliency_base64?: string;
+  saliency_top_class?: string;
+  saliency_error?: string;
 }
 
 export async function inferencePredict(
   file: File,
   modelId: string,
+  generateSaliency = true,
 ): Promise<InferenceResult> {
   const body = new FormData();
   body.append("file", file);
   body.append("model_id", modelId);
+  body.append("generate_saliency", generateSaliency.toString());
   const res = await fetch(`${INFERENCE_URL}/predict`, {
     method: "POST",
     body,

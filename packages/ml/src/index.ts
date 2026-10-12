@@ -159,6 +159,178 @@ export function argmax(scores: number[], labels: string[]): PredictionScores | n
 
 export const CONFIDENCE_THRESHOLD = 0.5;
 
+/**
+ * Saliency map (occlusion-sensitivity heatmap) for each model.
+ * Generated with saliency/gen_saliency.py using 16x16 occlusion patches.
+ * Shows which image regions most influence the model's decision.
+ * Note: Chest models do NOT reliably localize lung fields - see PRODUCT.md §8.4.
+ */
+export const SALIENCY_IMAGES: Record<string, string> = {
+  pneumonia: "/saliency/carlens_pneumonia_saliency.png",
+  model: "/saliency/carlens_model_saliency.png",
+  model_unquant: "/saliency/carlens_model_unquant_saliency.png",
+  brain: "/saliency/carlens_brain_saliency.png",
+  new_model: "/saliency/carlens_new_model_saliency.png",
+};
+
+export function getSaliencyImage(modelId: string): string | undefined {
+  return SALIENCY_IMAGES[modelId];
+}
+
+/**
+ * Clinical interpretation guidance per model output label.
+ * Provides context-appropriate next steps and red flags.
+ * Does NOT replace clinical judgment.
+ */
+export const CLINICAL_INTERPRETATION: Record<string, Record<string, {
+  meaning: string;
+  nextSteps: string[];
+  redFlags: string[];
+}>> = {
+  pneumonia: {
+    NORMAL: {
+      meaning: "No radiographic evidence of pneumonia detected by this model.",
+      nextSteps: [
+        "Correlate clinically - if symptoms persist, consider repeat imaging or alternative diagnosis",
+        "Review for non-infectious causes of symptoms (e.g., COPD exacerbation, heart failure, PE)",
+      ],
+      redFlags: [
+        "High clinical suspicion despite negative imaging warrants further workup",
+        "Immunocompromised patients may have atypical presentations",
+      ],
+    },
+    BACTERIAL_PNEUMONIA: {
+      meaning: "Pattern suggestive of bacterial pneumonia (lobar/segmental consolidation).",
+      nextSteps: [
+        "Start empiric antibiotics per local guidelines (e.g., beta-lactam + macrolide or respiratory fluoroquinolone)",
+        "Obtain sputum/blood cultures if hospitalized",
+        "Follow up chest X-ray in 4-6 weeks to confirm resolution",
+      ],
+      redFlags: [
+        "Sepsis criteria: initiate sepsis protocol immediately",
+        "Pleural effusion on imaging: consider thoracentesis",
+        "Multilobar involvement or rapid progression: ICU evaluation",
+      ],
+    },
+    VIRAL_PNEUMONIA: {
+      meaning: "Pattern suggestive of viral pneumonia (interstitial/bilateral ground-glass).",
+      nextSteps: [
+        "Viral PCR panel (influenza, RSV, COVID-19, etc.)",
+        "Supportive care; antivirals if influenza/COVID-19 confirmed and within window",
+        "Monitor for secondary bacterial superinfection",
+      ],
+      redFlags: [
+        "Hypoxemia requiring supplemental oxygen",
+        "Rapid clinical deterioration - consider bacterial co-infection",
+        "Immunocompromised host - lower threshold for admission",
+      ],
+    },
+  },
+  model: {
+    NORMAL: {
+      meaning: "No radiographic evidence of pneumonia detected by this binary model.",
+      nextSteps: [
+        "Correlate clinically; consider alternative diagnoses if symptoms persist",
+        "This model has ~60% measured accuracy - clinical correlation essential",
+      ],
+      redFlags: [
+        "High pre-test probability of pneumonia despite negative result warrants further imaging",
+      ],
+    },
+    PNEUMONIA: {
+      meaning: "Pattern suggestive of pneumonia (binary classification).",
+      nextSteps: [
+        "Clinical correlation required - this model cannot distinguish bacterial vs viral",
+        "Obtain labs (CBC, CRP, procalcitonin), blood cultures if admitted",
+        "Empiric antibiotics per severity and local guidelines",
+        "Follow-up imaging in 4-6 weeks",
+      ],
+      redFlags: [
+        "Model accuracy ~60% - do not rely solely on this prediction",
+        "Severe sepsis/septic shock criteria: emergent intervention",
+        "Consider TB, fungal, or neoplastic mimics in appropriate contexts",
+      ],
+    },
+  },
+  model_unquant: {
+    NORMAL: {
+      meaning: "No radiographic evidence of pneumonia (unquantized model, ~50% accuracy).",
+      nextSteps: [
+        "Same as binary model above - clinical correlation mandatory",
+        "This unquantized variant performs worse than quantized model.tflite",
+      ],
+      redFlags: [
+        "Lower accuracy than quantized counterpart - higher false negative risk",
+      ],
+    },
+    PNEUMONIA: {
+      meaning: "Pattern suggestive of pneumonia (unquantized model).",
+      nextSteps: [
+        "Same clinical workup as binary model",
+        "Consider this result less reliable than model.tflite",
+      ],
+      redFlags: [
+        "~50% accuracy (near chance) - treat as hypothesis-generating only",
+      ],
+    },
+  },
+  brain: {
+    no_tumor: {
+      meaning: "No brain tumor detected on MRI by this model.",
+      nextSteps: [
+        "Clinical correlation - consider other causes of neurologic symptoms",
+        "If high suspicion persists, dedicated neuroradiology review recommended",
+      ],
+      redFlags: [
+        "Small or skull-base lesions may be missed",
+        "Non-neoplastic pathology (MS, stroke, infection) not evaluated",
+      ],
+    },
+    tumor: {
+      meaning: "Possible brain tumor detected on MRI.",
+      nextSteps: [
+        "Urgent neurosurgery/neuro-oncology referral",
+        "Contrast-enhanced MRI for better characterization",
+        "Multidisciplinary tumor board discussion",
+      ],
+      redFlags: [
+        "Mass effect, midline shift, or hydrocephalus: neurosurgical emergency",
+        "This is an unverified educational model - confirm with radiologist",
+      ],
+    },
+  },
+  new_model: {
+    glioma: {
+      meaning: "Pattern suggestive of glioma (primary brain tumor).",
+      nextSteps: ["Urgent neuro-oncology referral", "Advanced MRI with spectroscopy/perfusion", "Biopsy for molecular characterization (IDH, 1p/19q, MGMT)"],
+      redFlags: ["Higher-grade features (enhancement, necrosis) = worse prognosis", "Midline shift or edema with mass effect: consider steroids + urgent surgery"],
+    },
+    meningioma: {
+      meaning: "Pattern suggestive of meningioma (extra-axial tumor).",
+      nextSteps: ["Neurosurgery referral for resection consideration", "Contrast MRI to assess dural tail and vascular supply", "Hormone receptor status if recurrent"],
+      redFlags: ["Brain invasion (WHO grade II/III) changes management", "Critical location (skull base, optic nerve) requires subspecialty expertise"],
+    },
+    pituitary: {
+      meaning: "Pattern suggestive of pituitary adenoma.",
+      nextSteps: ["Endocrinology workup (prolactin, IGF-1, cortisol, ACTH, LH/FSH, TSH)", "Sellal/parasellar MRI with dynamic contrast", "Visual field testing if suprasellar extension"],
+      redFlags: ["Pituitary apoplexy: sudden headache, vision loss, ophthalmoplegia = emergency", "Macroadenoma >1cm with chiasmal compression: urgent decompression"],
+    },
+    no_tumor: {
+      meaning: "No tumor detected in 4-class brain model.",
+      nextSteps: ["Consider demyelination, infarct, infection, metabolic etiologies", "Neurology referral for workup"],
+      redFlags: ["Small lesions below resolution limit may be missed"],
+    },
+  },
+};
+
+export function getClinicalInterpretation(modelId: string, label: string) {
+  return CLINICAL_INTERPRETATION[modelId]?.[label] ?? {
+    meaning: "No specific guidance available for this result.",
+    nextSteps: ["Clinical correlation recommended"],
+    redFlags: ["Do not base clinical decisions solely on this model output"],
+  };
+}
+
 export * from "./validation.js";
 export * from "./clinical.js";
 export * from "./report.js";

@@ -7,6 +7,7 @@ input/output tensor shapes (resolving the P0 manifest gaps).
 
 from __future__ import annotations
 
+import base64
 import io
 import os
 import threading
@@ -37,6 +38,142 @@ app.add_middleware(
 
 _lock = threading.Lock()
 _interp_cache: dict[str, Any] = {}
+
+# Saliency generation constants
+SALIENCY_SIZE = 224
+SALIENCY_PATCH = 16
+
+
+def _generate_saliency(
+    interp: Any,
+    image_uint8: np.ndarray,  # (224, 224, 3) uint8 [0, 255]
+    input_details: dict[str, Any],
+    output_details: dict[str, Any],
+    top_class_idx: int,
+) -> str:
+    """
+    Generate occlusion-sensitivity saliency heatmap on the input image.
+    Expects image_uint8 as (H, W, 3) uint8 in [0, 255].
+    Returns base64-encoded PNG.
+    """
+    # Preprocess function matching gen_saliency.py
+    def preprocess(rgb: np.ndarray) -> np.ndarray:
+        arr = rgb.astype(np.float32) / 127.5 - 1.0
+        # Handle both NHWC and NCHW input shapes
+        shape = tuple(int(v) for v in input_details["shape"])
+        if len(shape) == 4:
+            if shape[3] == 3:  # NHWC
+                return arr[None, ...]  # (1, H, W, 3)
+            elif shape[1] == 3:  # NCHW
+                arr = np.transpose(arr, (2, 0, 1))
+                return arr[None, ...]  # (1, 3, H, W)
+        return arr[None, ...]
+
+    def get_probs(rgb: np.ndarray) -> np.ndarray:
+        """Run inference on uint8 RGB image, return probabilities."""
+        tensor = preprocess(rgb)
+        interp.set_tensor(input_details["index"], tensor)
+        interp.invoke()
+        out = interp.get_tensor(output_details["index"]).flatten().astype(np.float64)
+        if out.min() < 0 or abs(out.sum() - 1.0) > 0.01:
+            out = out - out.max()
+            e = np.exp(out)
+            out = e / e.sum()
+        return out
+
+    # Baseline on original image
+    baseline_probs = get_probs(image_uint8)
+    baseline_top = baseline_probs[top_class_idx]
+
+    # Neutral occluder (mean pixel value of original image)
+    occluder = image_uint8.reshape(-1, 3).mean(axis=0).astype(np.float32)
+
+    grid_h = SALIENCY_SIZE // SALIENCY_PATCH
+    grid_w = SALIENCY_SIZE // SALIENCY_PATCH
+    heat = np.zeros((grid_h, grid_w), dtype=np.float64)
+
+    for gy in range(0, SALIENCY_SIZE, SALIENCY_PATCH):
+        for gx in range(0, SALIENCY_SIZE, SALIENCY_PATCH):
+            occ = image_uint8.copy()
+            occ[gy:gy + SALIENCY_PATCH, gx:gx + SALIENCY_PATCH] = occluder
+            probs = get_probs(occ)
+            heat[gy // SALIENCY_PATCH, gx // SALIENCY_PATCH] = baseline_top - probs[top_class_idx]
+
+    # Keep only positive contributions
+    heat = np.clip(heat, 0, None)
+
+    # Proper normalization with contrast stretching
+    min_val = float(heat.min())
+    max_val = float(heat.max())
+    if max_val - min_val > 1e-7:
+        heat_norm = (heat - min_val) / (max_val - min_val)
+    else:
+        heat_norm = np.zeros_like(heat, dtype=np.float64)
+
+    # Upsample to image size
+    from PIL import Image as PILImage
+
+    heat_img = PILImage.fromarray((heat_norm * 255).astype(np.uint8), mode="L").resize(
+        (SALIENCY_SIZE, SALIENCY_SIZE), PILImage.BICUBIC
+    )
+    heat_arr = np.asarray(heat_img).astype(np.float32) / 255.0
+
+    # Apply JET colormap (matplotlib-style) for high visibility
+    # jet colormap: blue -> cyan -> green -> yellow -> red
+    def apply_jet_colormap(gray: np.ndarray) -> np.ndarray:
+        """Apply jet colormap to grayscale [0,1] array, returns RGB [0,255] uint8."""
+        # Clip to [0, 1]
+        gray = np.clip(gray, 0, 1)
+        # Jet colormap computation
+        # 4 segments: [0, 0.25) blue->cyan, [0.25, 0.5) cyan->green, [0.5, 0.75) green->yellow, [0.75, 1] yellow->red
+        r = np.zeros_like(gray)
+        g = np.zeros_like(gray)
+        b = np.zeros_like(gray)
+
+        # Segment 1: 0.0 - 0.35 (blue to cyan)
+        m1 = gray < 0.35
+        r[m1] = 0
+        g[m1] = gray[m1] / 0.35
+        b[m1] = 1.0
+
+        # Segment 2: 0.35 - 0.65 (cyan to green)
+        m2 = (gray >= 0.35) & (gray < 0.65)
+        r[m2] = 0
+        g[m2] = 1.0
+        b[m2] = 1.0 - (gray[m2] - 0.35) / 0.30
+
+        # Segment 3: 0.65 - 0.85 (green to yellow)
+        m3 = (gray >= 0.65) & (gray < 0.85)
+        r[m3] = (gray[m3] - 0.65) / 0.20
+        g[m3] = 1.0
+        b[m3] = 0
+
+        # Segment 4: 0.85 - 1.0 (yellow to red)
+        m4 = gray >= 0.85
+        r[m4] = 1.0
+        g[m4] = 1.0 - (gray[m4] - 0.85) / 0.15
+        b[m4] = 0
+
+        rgb = np.stack([r, g, b], axis=-1)
+        return np.clip(rgb * 255, 0, 255).astype(np.uint8)
+
+    heatmap_color = apply_jet_colormap(heat_arr)
+
+    # Alpha blend: 0.6 original + 0.4 heatmap for high visibility
+    alpha = 0.4
+    overlay = cv2_add_weighted(image_uint8, 1.0 - alpha, heatmap_color, alpha, 0)
+
+    # Encode as base64 PNG
+    buf = io.BytesIO()
+    PILImage.fromarray(overlay).save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def cv2_add_weighted(src1: np.ndarray, alpha: float, src2: np.ndarray, beta: float, gamma: float) -> np.ndarray:
+    """Replicate cv2.addWeighted using numpy: dst = src1*alpha + src2*beta + gamma."""
+    # Ensure both are float32 for computation
+    dst = src1.astype(np.float32) * alpha + src2.astype(np.float32) * beta + gamma
+    return np.clip(dst, 0, 255).astype(np.uint8)
 
 
 def get_interpreter(model_id: str) -> Any:
@@ -165,6 +302,7 @@ def _quant_summary(details: dict[str, Any]) -> str | None:
 def predict(
     file: UploadFile = File(...),
     model_id: str = Form("pneumonia"),
+    generate_saliency: bool = Form(True),
 ) -> Any:
     # 1. Resolve the model and its domain. Unknown model -> 400.
     spec = model_registry.MODELS.get(model_id)
@@ -242,4 +380,28 @@ def predict(
         # Passed Stage A but the body part was ambiguous: still return the model
         # output, but flag it so the UI can warn the user.
         result["low_confidence_domain"] = True
+
+    # 4. Generate dynamic saliency heatmap on the user's uploaded image
+    if generate_saliency:
+        try:
+            # Prepare the original image as uint8 (224, 224, 3) for saliency generation
+            # This matches what gen_saliency.py expects
+            image_uint8 = np.asarray(
+                image.convert("RGB").resize((SALIENCY_SIZE, SALIENCY_SIZE)),
+                dtype=np.uint8
+            )
+
+            # Get top class index from result
+            top_label = result["label"]
+            top_class_idx = spec["labels"].index(top_label)
+
+            saliency_b64 = _generate_saliency(
+                interp, image_uint8, input_details, output_details, top_class_idx
+            )
+            result["saliency_base64"] = saliency_b64
+            result["saliency_top_class"] = top_label
+        except Exception as exc:  # noqa: BLE001
+            # Saliency is best-effort; don't fail the prediction if it errors
+            result["saliency_error"] = f"Saliency generation failed: {exc}"
+
     return result

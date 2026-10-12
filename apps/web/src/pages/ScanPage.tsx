@@ -8,6 +8,8 @@ import {
   describeClinicalContext,
   emptyClinicalAnswers,
   getClinicalFields,
+  getClinicalInterpretation,
+  getSaliencyImage,
   MODEL_DISCLAIMER,
   MODELS,
   type ClinicalAnswers,
@@ -163,6 +165,12 @@ export function ScanPage() {
   const chestModels = MODELS.filter((m) => m.domain === "chest");
   const brainModels = MODELS.filter((m) => m.domain === "brain");
   const lowConfidenceDomain = result?.low_confidence_domain === true;
+  // Use dynamic saliency from API response
+  const saliencyBase64 = result?.saliency_base64 ?? null;
+  // Only use static fallback if it matches the model's domain
+  const saliencyStatic = result && getSaliencyImage(result.model) ? getSaliencyImage(result.model) : null;
+  const isStaticFallbackDomainMismatch = saliencyStatic && domain !== "chest" && result?.model !== "model" && result?.model !== "model_unquant";
+  const interpretation = result ? getClinicalInterpretation(result.model, result.label) : null;
 
   function renderField(
     field: (typeof clinicalFields)[number],
@@ -350,93 +358,259 @@ export function ScanPage() {
       )}
 
       {result && (
-        <div className="rounded-xl border border-gray-200 bg-white p-6">
+        <div className="rounded-xl border border-gray-200 bg-white p-6 space-y-6">
           {lowConfidenceDomain && (
-            <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
-              <p className="text-sm font-semibold text-amber-800">
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3" role="alert">
+              <p className="text-sm font-semibold text-amber-800 flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
                 Body part could not be confirmed
               </p>
-              <p className="text-xs text-amber-700">
-                This image looks like a medical scan but the body part is
-                ambiguous, so the result below may be unreliable.
+              <p className="mt-1 text-xs text-amber-700">
+                This image looks like a medical scan but the body part is ambiguous, so the result below may be unreliable.
               </p>
             </div>
           )}
-          <h2 className="text-sm font-medium text-gray-900 mb-2">Result</h2>
-          <p className="text-xs text-gray-500 mb-2">
-            Model: {result.model}
-            {MODELS.find((m) => m.id === result.model)?.file
-              ? ` (${MODELS.find((m) => m.id === result.model)!.file})`
-              : ""}
-          </p>
-          <p className="text-lg font-semibold text-gray-900">{result.label}</p>
-          <p className="text-sm text-gray-500">
-            Confidence: {(result.confidence * 100).toFixed(1)}%
-          </p>
 
-          <ul className="mt-3 space-y-2">
-            {result.scores.map((s) => (
-              <li key={s.label} className="text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-700">{s.label}</span>
-                  <span className="text-gray-500">
-                    {(s.confidence * 100).toFixed(1)}%
-                  </span>
+          {/* Model & Verdict Header */}
+          <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Classification Result</h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  Model: <span className="font-mono text-teal-700">{result.model}</span>
+                  {result.model_domain && (
+                    <> · Domain: <span className="capitalize">{result.model_domain}</span></>
+                  )}
+                </p>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="text-right">
+                  <p className="text-2xl font-bold text-gray-900">{result.label}</p>
+                  <p className="text-sm text-gray-500">
+                    Confidence: <span className="font-medium">{(result.confidence * 100).toFixed(1)}%</span>
+                  </p>
                 </div>
-                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
-                  <div
-                    className="h-full rounded-full bg-teal-500"
-                    style={{
-                      width: `${Math.max(0, Math.min(100, s.confidence * 100))}%`,
-                    }}
-                  />
+                <div className="w-px h-10 bg-gray-200 sm:w-px sm:h-10 hidden sm:block" />
+                <div className="text-center">
+                  <p className="text-xs text-gray-400 uppercase tracking-wide">Model Accuracy</p>
+                  <p className="text-sm font-medium text-teal-700">{result.accuracy ?? "N/A"}</p>
                 </div>
-              </li>
-            ))}
-          </ul>
+              </div>
+            </div>
+          </div>
 
-          {submittedContext && (
-            <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50 p-3">
-              <p className="text-xs font-medium text-gray-700">
-                {CLINICAL_DOMAIN_LABELS[domain]} clinical context
+          {/* Class Probabilities */}
+          <div className="rounded-lg border border-gray-100 bg-white p-4">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Class Probabilities</h3>
+            <ul className="space-y-3">
+              {result.scores.map((s) => (
+                <li key={s.label} className="text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-gray-700 font-medium min-w-[140px]">{s.label}</span>
+                    <span className="text-gray-500 font-mono text-right w-16">
+                      {(s.confidence * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
+                    <div
+                      className="h-full rounded-full transition-all duration-300"
+                      style={{
+                        width: `${Math.max(0, Math.min(100, s.confidence * 100))}%`,
+                        backgroundColor: s.confidence === result.confidence ? "#0d9488" : "#94a3b8",
+                      }}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Saliency Map / Heatmap - Dynamic from API (user's uploaded image) or static fallback */}
+          {saliencyBase64 && (
+            <div className="rounded-lg border border-gray-100 bg-white p-4">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <svg className="w-4 h-4 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </svg>
+                Saliency Map (Occlusion Sensitivity)
+              </h3>
+              <p className="text-xs text-gray-500 mb-3">
+                Heatmap showing which image regions most influenced the model's decision on <strong>your uploaded image</strong>.
+                Brighter areas = higher importance. Generated via 16×16 occlusion patches on the fly.
               </p>
-              <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+              <div className="relative aspect-square max-w-md mx-auto rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+                <img
+                  src={`data:image/png;base64,${saliencyBase64}`}
+                  alt={`Dynamic saliency heatmap for ${result?.model} on your image (top class: ${result?.saliency_top_class})`}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <p className="mt-2 text-xs text-teal-600">
+                ✓ Generated dynamically on your uploaded image
+              </p>
+              {domain === "chest" && (
+                <p className="mt-1 text-xs text-amber-600">
+                  Note: Chest models do NOT reliably localize lung fields. See validation findings (PRODUCT.md §8.4).
+                </p>
+              )}
+              {domain === "brain" && (
+                <p className="mt-1 text-xs text-amber-600">
+                  Note: Tutorial-grade model weights may not reliably localize pathology boundaries.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Static fallback - only show if domain matches (chest models only) */}
+          {saliencyStatic && !saliencyBase64 && domain === "chest" && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <h3 className="text-sm font-semibold text-amber-800 mb-3 flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                Saliency Map (Pre-generated Reference)
+              </h3>
+              <p className="text-xs text-amber-700 mb-3">
+                Dynamic heatmap generation failed: {result?.saliency_error ?? "unknown"}.
+                Showing pre-generated reference heatmap for a <strong>chest X-ray</strong> (not your image).
+              </p>
+              <div className="relative aspect-square max-w-md mx-auto rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+                <img
+                  src={saliencyStatic}
+                  alt={`Static saliency heatmap for ${result?.model} model (reference chest X-ray)`}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <p className="mt-1 text-xs text-amber-600">
+                Note: Chest models do NOT reliably localize lung fields. See validation findings (PRODUCT.md §8.4).
+              </p>
+            </div>
+          )}
+
+          {/* Brain model fallback - show original image with warning instead of chest heatmap */}
+          {!saliencyBase64 && domain === "brain" && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <h3 className="text-sm font-semibold text-amber-800 mb-3 flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                Saliency Map Unavailable
+              </h3>
+              <p className="text-xs text-amber-700 mb-3">
+                Dynamic heatmap generation failed: {result?.saliency_error ?? "unknown"}.
+                No brain MRI reference heatmap available.
+              </p>
+              <div className="relative aspect-square max-w-md mx-auto rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+                {preview && (
+                  <img
+                    src={preview}
+                    alt="Your uploaded brain MRI"
+                    className="w-full h-full object-cover opacity-75"
+                  />
+                )}
+              </div>
+              <p className="mt-2 text-xs text-amber-600">
+                Showing your uploaded brain MRI above. Dynamic occlusion sensitivity unavailable for this model.
+              </p>
+            </div>
+          )}
+
+          {/* Clinical Interpretation */}
+          {interpretation && (
+            <div className="rounded-lg border border-teal-100 bg-teal-50 p-4">
+              <h3 className="text-sm font-semibold text-teal-800 mb-3 flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+                Clinical Interpretation: {result.label}
+              </h3>
+              <p className="text-sm text-teal-700 mb-3">{interpretation.meaning}</p>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-md bg-white p-3 border border-teal-100">
+                  <h4 className="text-xs font-semibold text-teal-800 uppercase tracking-wide mb-2">Suggested Next Steps</h4>
+                  <ul className="space-y-1 text-xs text-teal-700">
+                    {interpretation.nextSteps.map((step, i) => (
+                      <li key={i} className="flex gap-1">
+                        <span className="text-teal-500">→</span>
+                        <span>{step}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="rounded-md bg-white p-3 border border-red-100">
+                  <h4 className="text-xs font-semibold text-red-800 uppercase tracking-wide mb-2">Red Flags / Considerations</h4>
+                  <ul className="space-y-1 text-xs text-red-700">
+                    {interpretation.redFlags.map((flag, i) => (
+                      <li key={i} className="flex gap-1">
+                        <span className="text-red-500">⚠</span>
+                        <span>{flag}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Clinical Context */}
+          {submittedContext && (
+            <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                {CLINICAL_DOMAIN_LABELS[domain]} Clinical Context
+              </h3>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                 {describeClinicalContext(domain, submittedContext).map((row) => (
                   <div key={row.id} className="flex justify-between gap-2">
                     <dt className="text-gray-500">{row.label}</dt>
-                    <dd className="text-gray-800">{row.value}</dd>
+                    <dd className="text-gray-800 font-medium">{row.value}</dd>
                   </div>
                 ))}
               </dl>
-              <p className="mt-2 text-xs text-gray-400">
-                {CLINICAL_CONTEXT_DISCLAIMER}
-              </p>
+              <p className="mt-2 text-xs text-gray-400">{CLINICAL_CONTEXT_DISCLAIMER}</p>
             </div>
           )}
 
-          <p className="mt-4 text-xs text-gray-400">
-            Input {result.input_shape.join("×")} {result.input_dtype}
-            {result.preprocessing ? ` · ${result.preprocessing}` : ""}
-            {result.accuracy ? ` · measured accuracy ${result.accuracy}` : ""}
-          </p>
-          <p className="mt-2 text-xs font-medium text-amber-600">
-            {result.disclaimer ?? MODEL_DISCLAIMER}
-          </p>
+          {/* Technical Details */}
+          <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+            <p className="text-xs text-gray-400 font-mono">
+              Input: {result.input_shape.join("×")} {result.input_dtype}
+              {result.preprocessing ? ` · Preprocessing: ${result.preprocessing}` : ""}
+              {result.accuracy ? ` · Measured accuracy: ${result.accuracy}` : ""}
+            </p>
+            <p className="mt-1 text-xs font-medium text-amber-600">
+              {result.disclaimer ?? MODEL_DISCLAIMER}
+            </p>
+          </div>
 
+          {/* Report Download */}
           <button
             type="button"
             onClick={onDownloadReport}
             disabled={reportBusy}
-            className="mt-4 w-full rounded-md bg-teal-600 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-40"
+            className="w-full rounded-md bg-teal-600 py-2.5 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-40 transition-colors"
           >
-            {reportBusy ? "Preparing report…" : "Download report (PDF)"}
+            {reportBusy ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Preparing report…
+              </span>
+            ) : (
+              "Download Report (PDF)"
+            )}
           </button>
           <p className="mt-1 text-center text-xs text-gray-400">
-            Includes the image, verdict, clinical context and AI-drafted
-            guidance.
+            Includes the image, verdict, clinical context, saliency map, and AI-drafted guidance.
           </p>
           {reportError && (
-            <p className="mt-2 text-xs text-red-600">{reportError}</p>
+            <p className="mt-2 text-xs text-red-600 text-center">{reportError}</p>
           )}
         </div>
       )}

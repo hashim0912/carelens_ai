@@ -17,17 +17,21 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 MODELS_DIR = os.path.join(ROOT, "models")
-IMAGE = os.path.join(ROOT, "carlens (1).jfif")
+# Domain-specific sample images
+CHEST_IMAGE = os.path.join(ROOT, "carlens (1).jfif")
+BRAIN_IMAGE = os.path.join(ROOT, "brain_tumer.jfif")
 OUT_DIR = HERE
 
 SIZE = 224
 PATCH = 16
-# (model_id, file, labels)
+# (model_id, file, labels, image_path)
 TARGETS = [
     ("pneumonia", "newPneumoniaModel.tflite",
-     ["NORMAL", "BACTERIAL_PNEUMONIA", "VIRAL_PNEUMONIA"]),
-    ("model", "model.tflite", ["NORMAL", "PNEUMONIA"]),
-    ("model_unquant", "model_unquant.tflite", ["NORMAL", "PNEUMONIA"]),
+     ["NORMAL", "BACTERIAL_PNEUMONIA", "VIRAL_PNEUMONIA"], CHEST_IMAGE),
+    ("model", "model.tflite", ["NORMAL", "PNEUMONIA"], CHEST_IMAGE),
+    ("model_unquant", "model_unquant.tflite", ["NORMAL", "PNEUMONIA"], CHEST_IMAGE),
+    ("brain", "brain_model.tflite", ["no_tumor", "tumor"], BRAIN_IMAGE),
+    ("new_model", "new_model.tflite", ["glioma", "meningioma", "pituitary", "no_tumor"], BRAIN_IMAGE),
 ]
 
 
@@ -61,10 +65,14 @@ def colormap(t: np.ndarray) -> np.ndarray:
     return (np.stack([r, g, b], axis=-1) * 255).astype(np.uint8)
 
 
-def run(model_id: str, fname: str, labels: list[str], rgb0: np.ndarray) -> None:
+def run(model_id: str, fname: str, labels: list[str], image_path: str) -> None:
     path = os.path.join(MODELS_DIR, fname)
     interp = Interpreter(model_path=path)
     interp.allocate_tensors()
+
+    # Load and preprocess the domain-specific image
+    img = Image.open(image_path).convert("RGB").resize((SIZE, SIZE))
+    rgb0 = np.asarray(img, dtype=np.uint8)
 
     base = probs_for(interp, rgb0)
     top = int(np.argmax(base))
@@ -110,11 +118,16 @@ def run(model_id: str, fname: str, labels: list[str], rgb0: np.ndarray) -> None:
 
 
 def main() -> int:
-    img = Image.open(IMAGE).convert("RGB").resize((SIZE, SIZE))
-    rgb0 = np.asarray(img, dtype=np.uint8)
-    overlays = [rgb0]
-    for model_id, fname, labels in TARGETS:
-        run(model_id, fname, labels, rgb0)
+    overlays = []
+    # Load chest image for chest models
+    chest_img = Image.open(CHEST_IMAGE).convert("RGB").resize((SIZE, SIZE))
+    chest_rgb = np.asarray(chest_img, dtype=np.uint8)
+    # Load brain image for brain models
+    brain_img = Image.open(BRAIN_IMAGE).convert("RGB").resize((SIZE, SIZE))
+    brain_rgb = np.asarray(brain_img, dtype=np.uint8)
+
+    for model_id, fname, labels, img_path in TARGETS:
+        run(model_id, fname, labels, img_path)
         overlays.append(
             np.asarray(
                 Image.open(
@@ -122,14 +135,18 @@ def main() -> int:
                 ).convert("RGB")
             )
         )
-    # montage: original | pneumonia | model | model_unquant
+    # montage: chest original | pneumonia | model | model_unquant | brain original | brain | new_model
     gap = np.full((SIZE, 6, 3), 255, dtype=np.uint8)
-    tiles = []
-    for i, ov in enumerate(overlays):
-        if i:
-            tiles.append(gap)
+    tiles = [chest_rgb, gap]
+    for ov in overlays[:3]:  # chest models
         tiles.append(ov)
-    montage = np.concatenate(tiles, axis=1)
+        tiles.append(gap)
+    tiles.append(brain_rgb)
+    tiles.append(gap)
+    for ov in overlays[3:]:  # brain models
+        tiles.append(ov)
+        tiles.append(gap)
+    montage = np.concatenate(tiles[:-1], axis=1)  # remove last gap
     out = os.path.join(OUT_DIR, "carlens_saliency_montage.png")
     Image.fromarray(montage).save(out)
     print(f"  saved {out}")
