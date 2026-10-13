@@ -1,6 +1,90 @@
 @import "tailwindcss";
 
-body {
-  margin: 0;
-  font-family: ui-sans-serif, system-ui, sans-serif;
+@theme {
+  /* CareLens design system — light clinical theme */
+  --color-canvas: #f5f8fd;
+  --color-surface: #ffffff;
+  --color-surface-2: #f7faff;
+  --color-primary: #2864f0;
+  --color-primary-soft: #eaf1ff;
+  --color-navy: #152b50;
+  --color-muted: #6c7f9e;
+  --color-line: #e1eaf6;
+  --color-ai: #7357f5;
+  --color-success: #0f9f91;
+  --color-warn: #e9a23b;
+  --color-critical: #dc4c64;
+  --color-viewer: #07101d;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --shadow-card: 0 1px 2px rgb(21 43 80 / 0.04),
+    0 4px 12px -2px rgb(21 43 80 / 0.06);
+  --shadow-pop: 0 8px 24px -6px rgb(21 43 80 / 0.16),
+    0 0 0 1px rgb(21 43 80 / 0.04);
+  --shadow-glow: 0 0 0 3px rgb(40 100 240 / 0.16);
+
+  --radius-card: 0.75rem;
+  --radius-field: 0.5rem;
+}
+
+@layer base {
+  body {
+    @apply bg-canvas text-navy antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--color-primary-soft);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  .card {
+    @apply rounded-[0.75rem] border border-line bg-surface shadow-card;
+  }
+
+  .card-pad {
+    @apply p-5;
+  }
+
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:shadow-glow;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: var(--color-line);
+    border-radius: 8px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }

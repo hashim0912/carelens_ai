@@ -1,6 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import { Users as UsersIcon } from "lucide-react";
 import { apiPaths } from "@carelens/shared";
 import { apiFetch } from "../lib/api";
+import { Badge, Card, CardHeader, EmptyState, ErrorState, LoadingState } from "../components/ui";
+import type { BadgeTone } from "../components/ui";
 
 type User = {
   id: string;
@@ -14,62 +17,70 @@ interface UsersResponse {
   users: User[];
 }
 
+const roleTone: Record<string, BadgeTone> = {
+  ADMIN: "critical",
+  DOCTOR: "ai",
+  STAFF: "info",
+};
+
 export function UsersPage() {
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["users"],
     queryFn: () => apiFetch<UsersResponse>(apiPaths.users),
   });
 
-  if (isLoading) return <p className="text-sm text-gray-500">Loading…</p>;
+  if (isLoading) return <LoadingState label="Loading users…" />;
   if (error)
-    return (
-      <p className="text-sm text-red-600">
-        Failed to load users: {String((error as Error).message)}
-      </p>
-    );
+    return <ErrorState message={String((error as Error).message)} onRetry={() => void refetch()} />;
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold text-gray-900">Users</h1>
-        <p className="text-sm text-gray-500">
-          Manage staff and doctor accounts.
-        </p>
+        <h1 className="text-2xl font-semibold text-navy">Users</h1>
+        <p className="mt-1 text-sm text-muted">Manage staff and doctor accounts.</p>
       </header>
-      <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+
+      <Card className="overflow-hidden">
+        <CardHeader
+          icon={<UsersIcon className="h-4 w-4" />}
+          title="Team directory"
+          subtitle={`${data?.users.length ?? 0} account(s)`}
+        />
         {data?.users.length ? (
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left text-gray-500">
-              <tr>
-                <th className="px-5 py-2 font-medium">Name</th>
-                <th className="px-5 py-2 font-medium">Email</th>
-                <th className="px-5 py-2 font-medium">Role</th>
-                <th className="px-5 py-2 font-medium">Created</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {data.users.map((u) => (
-                <tr key={u.id}>
-                  <td className="px-5 py-2 font-medium text-gray-900">
-                    {u.name}
-                  </td>
-                  <td className="px-5 py-2">{u.email}</td>
-                  <td className="px-5 py-2">
-                    <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700">
-                      {u.role}
-                    </span>
-                  </td>
-                  <td className="px-5 py-2 text-gray-500">
-                    {new Date(u.createdAt).toLocaleDateString()}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-surface-2 text-left text-muted">
+                <tr>
+                  <th className="px-5 py-2.5 font-medium">Name</th>
+                  <th className="px-5 py-2.5 font-medium">Email</th>
+                  <th className="px-5 py-2.5 font-medium">Role</th>
+                  <th className="px-5 py-2.5 font-medium">Created</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {data.users.map((u) => (
+                  <tr key={u.id} className="transition-colors hover:bg-surface-2">
+                    <td className="px-5 py-2.5 font-medium text-navy">{u.name}</td>
+                    <td className="px-5 py-2.5 text-muted">{u.email}</td>
+                    <td className="px-5 py-2.5">
+                      <Badge tone={roleTone[u.role] ?? "neutral"}>{u.role}</Badge>
+                    </td>
+                    <td className="px-5 py-2.5 text-muted">
+                      {new Date(u.createdAt).toLocaleDateString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
-          <p className="px-5 py-6 text-sm text-gray-500">No users yet.</p>
+          <EmptyState
+            icon={<UsersIcon className="h-5 w-5" />}
+            title="No users yet"
+            className="m-5 border-0 bg-transparent"
+          />
         )}
-      </div>
+      </Card>
     </section>
   );
 }

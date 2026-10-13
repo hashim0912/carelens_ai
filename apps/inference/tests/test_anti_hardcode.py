@@ -35,7 +35,7 @@ def test_two_different_images_produce_different_scores(client, chest_xray_1, che
 def test_response_reflects_interpreter_output_exactly(client, chest_xray_1, monkeypatch):
     """The API output must be a pure function of the interpreter tensor."""
 
-    known = np.array([[0.10, 0.20, 0.70]], dtype=np.float32)
+    known = np.array([[0.30, 0.70]], dtype=np.float32)
 
     class FakeInterpreter:
         def get_input_details(self):
@@ -53,7 +53,7 @@ def test_response_reflects_interpreter_output_exactly(client, chest_xray_1, monk
             return [
                 {
                     "index": 1,
-                    "shape": np.array([1, 3]),
+                    "shape": np.array([1, 2]),
                     "dtype": np.float32,
                     "name": "output",
                 }
@@ -73,12 +73,11 @@ def test_response_reflects_interpreter_output_exactly(client, chest_xray_1, monk
     res = _post(client, chest_xray_1, "pneumonia", jpeg=True)
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["label"] == "VIRAL_PNEUMONIA"
+    assert body["label"] == "PNEUMONIA"
     assert body["confidence"] == pytest.approx(0.70, abs=1e-6)
     by_label = {s["label"]: s["confidence"] for s in body["scores"]}
-    assert by_label["NORMAL"] == pytest.approx(0.10, abs=1e-6)
-    assert by_label["BACTERIAL_PNEUMONIA"] == pytest.approx(0.20, abs=1e-6)
-    assert by_label["VIRAL_PNEUMONIA"] == pytest.approx(0.70, abs=1e-6)
+    assert by_label["NORMAL"] == pytest.approx(0.30, abs=1e-6)
+    assert by_label["PNEUMONIA"] == pytest.approx(0.70, abs=1e-6)
 
 
 def _explode(_mid):  # pragma: no cover - must never be called

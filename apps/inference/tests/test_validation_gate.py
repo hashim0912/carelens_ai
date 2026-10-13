@@ -27,9 +27,9 @@ def test_chest_xray_chest_model_succeeds(client, chest_xray_1):
     assert body["model_domain"] == "chest"
     assert body["input_analysis"]["is_medical_scan"] is True
     assert body["input_analysis"]["detected_domain"] == "chest"
-    # Real model output: a label from the registry and normalised scores.
-    assert body["label"] in ["NORMAL", "BACTERIAL_PNEUMONIA", "VIRAL_PNEUMONIA"]
-    assert len(body["scores"]) == 3
+    # Real model output: binary labels NORMAL / PNEUMONIA
+    assert body["label"] in ["NORMAL", "PNEUMONIA"]
+    assert len(body["scores"]) == 2
     total = sum(s["confidence"] for s in body["scores"])
     assert 0.9 <= total <= 1.1, total
     assert body["confidence"] == max(s["confidence"] for s in body["scores"])

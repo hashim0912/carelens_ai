@@ -1,43 +1,129 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { AnimatePresence } from "framer-motion";
+import { Activity, BrainCircuit, FileText, Send, Scan } from "lucide-react";
 import {
   buildClinicalContext,
-  CLINICAL_CONTEXT_DISCLAIMER,
-  CLINICAL_DOMAIN_LABELS,
   DEFAULT_MODEL_ID,
   describeClinicalContext,
   emptyClinicalAnswers,
   getClinicalFields,
   getClinicalInterpretation,
-  getSaliencyImage,
-  MODEL_DISCLAIMER,
+  getModel,
   MODELS,
   type ClinicalAnswers,
+  type ModelDomain,
 } from "@carelens/ml";
 import {
   createScan,
   downloadReportPdf,
-  InferenceResult,
   inferencePredict,
   RejectedInferenceError,
   saveBlob,
   submitScanResult,
   type InferenceRejection,
+  type InferenceResult,
+  type ReportPayload,
 } from "../lib/api";
+import { DiagnosticViewport, type ViewMode, type WindowLevel } from "../components/diagnostic/DiagnosticViewport";
+import { TelemetryProgress, type TelemetryStage } from "../components/diagnostic/TelemetryProgress";
+import { ClinicalSummaryCard } from "../components/diagnostic/ClinicalSummaryCard";
+import { StudySetupPanel } from "../components/diagnostic/StudySetupPanel";
+import { RejectionPanel } from "../components/diagnostic/RejectionPanel";
+import { EscalateModal } from "../components/diagnostic/EscalateModal";
+import {
+  AIAnalysisPanel,
+  OverviewResultCard,
+  PatientRail,
+  ReportPanel,
+  ScanPageHeader,
+  ScanTabs,
+  type ScanTabId,
+} from "../components/scan";
+import { useTelemetry } from "../hooks/useTelemetry";
+import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useScans } from "../hooks/useScansSearch";
+import { EmptyState, Toast } from "../components/ui";
+
+const TELEMETRY_STAGES: TelemetryStage[] = [
+  {
+    id: 0,
+    label: "Validating Scan Quality & Domain Gate",
+    detail: "Analyzing tissue contrast, entropy, aspect ratio",
+  },
+  {
+    id: 1,
+    label: "Initializing Neural Inference Engine",
+    detail: "Allocating tensor graphs, warming compute kernels",
+  },
+  {
+    id: 2,
+    label: "Running Deep Feature Extraction",
+    detail: "Forward pass through DenseNet121 backbone",
+  },
+  {
+    id: 3,
+    label: "Computing Dynamic Occlusion Saliency",
+    detail: "Generating continuous spatial attention matrix",
+  },
+  {
+    id: 4,
+    label: "Synthesizing Radiological Report",
+    detail: "Compiling clinical decision support briefing",
+  },
+];
+
+const REQUEST_TIMEOUT_MS = 60_000;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+
+interface EscalationAck {
+  reason: string;
+  urgency: "low" | "medium" | "high" | "critical";
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to legacy path */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
 
 export function ScanPage() {
   const queryClient = useQueryClient();
+  const { user } = useCurrentUser();
+  const { data: scansData, isLoading: scansLoading } = useScans();
+
+  // Study inputs
   const [file, setFile] = useState<File | null>(null);
-  const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
   const [preview, setPreview] = useState<string | null>(null);
+  const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
   const [answers, setAnswers] = useState<ClinicalAnswers>(() =>
     emptyClinicalAnswers("chest"),
   );
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [submittedContext, setSubmittedContext] = useState<Record<
-    string,
-    unknown
-  > | null>(null);
+
+  // Workspace tab
+  const [tab, setTab] = useState<ScanTabId>("overview");
+
+  // Outcome
+  const [submittedContext, setSubmittedContext] = useState<Record<string, unknown> | null>(null);
   const [result, setResult] = useState<InferenceResult | null>(null);
   const [rejection, setRejection] = useState<InferenceRejection | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +132,49 @@ export function ScanPage() {
   const [savedScanId, setSavedScanId] = useState<string | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+
+  // Viewport controls
+  const [saliencyOpacity, setSaliencyOpacity] = useState(65);
+  const [viewMode, setViewMode] = useState<ViewMode>("overlay");
+  const [thresholdSpotlight, setThresholdSpotlight] = useState(false);
+  const [invertContrast, setInvertContrast] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [windowLevel, setWindowLevel] = useState<WindowLevel>("default");
+
+  // Actions
+  const [copySuccess, setCopySuccess] = useState(false);
+  const [escalateOpen, setEscalateOpen] = useState(false);
+  const [escalationAck, setEscalationAck] = useState<EscalationAck | null>(null);
+
+  const telemetryStage = useTelemetry(busy, TELEMETRY_STAGES.length, 950);
+
+  const activeModel = getModel(modelId);
+  const domain: ModelDomain = activeModel?.domain ?? "chest";
+  const clinicalFields = getClinicalFields(domain);
+  const lowConfidenceDomain = result?.low_confidence_domain === true;
+  const saliencyBase64 = result?.saliency_base64 ?? null;
+  const interpretation = result
+    ? getClinicalInterpretation(result.model, result.label)
+    : null;
+  const stageLabels = TELEMETRY_STAGES.map((s) => s.label);
+  const stageProgress = Math.round(
+    ((telemetryStage + 1) / TELEMETRY_STAGES.length) * 100,
+  );
+
+  const gatingStatus = (() => {
+    if (rejection) {
+      return rejection.detected_domain && rejection.detected_domain !== "unknown"
+        ? `Domain gate: detected ${rejection.detected_domain}`
+        : "Domain gate: body part could not be confirmed";
+    }
+    if (result?.input_analysis) {
+      return lowConfidenceDomain
+        ? "Body part could not be confirmed — interpret with caution"
+        : `Domain verified: ${result.input_analysis.detected_domain}`;
+    }
+    return null;
+  })();
 
   function clearOutcome() {
     setResult(null);
@@ -57,16 +186,59 @@ export function ScanPage() {
     setReportError(null);
   }
 
-  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0] ?? null;
+  function resetViewport() {
+    setSaliencyOpacity(65);
+    setViewMode("overlay");
+    setThresholdSpotlight(false);
+    setInvertContrast(false);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    setWindowLevel("default");
+  }
+
+  function acceptFile(f: File | null) {
+    if (!f) return;
+    const okType =
+      /^image\/(png|jpe?g|webp|gif|bmp|tiff?)$/.test(f.type) || f.type === "";
+    if (!okType) {
+      setError("Unsupported image format. Upload a grayscale PNG or JPEG scan.");
+      return;
+    }
+    if (f.size > MAX_FILE_BYTES) {
+      setError("Image exceeds the 20 MB size limit.");
+      return;
+    }
+    if (preview) URL.revokeObjectURL(preview);
     setFile(f);
     clearOutcome();
-    setPreview(f ? URL.createObjectURL(f) : null);
+    const url = URL.createObjectURL(f);
+    setPreview(url);
+    resetViewport();
+  }
+
+  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0] ?? null;
+    e.target.value = "";
+    acceptFile(f);
+  }
+
+  function onFileDrop(f: File | null) {
+    acceptFile(f);
+  }
+
+  function onClearFile() {
+    if (preview) URL.revokeObjectURL(preview);
+    setFile(null);
+    setPreview(null);
+    clearOutcome();
   }
 
   function onSelectModel(id: string) {
+    const next = getModel(id);
+    const nextDomain: ModelDomain = next?.domain ?? "chest";
     setModelId(id);
     clearOutcome();
+    if (nextDomain !== domain) setAnswers(emptyClinicalAnswers(nextDomain));
     setFieldErrors({});
   }
 
@@ -80,11 +252,9 @@ export function ScanPage() {
     });
   }
 
-  async function onPredict(e: React.FormEvent) {
-    e.preventDefault();
-    if (!file) return;
+  async function onRunAnalysis() {
+    if (!file || busy) return;
 
-    const domain = activeModel?.domain ?? "chest";
     const { context, errors } = buildClinicalContext(domain, answers);
     if (errors.length > 0 || !context) {
       const mapped: Record<string, string> = {};
@@ -97,37 +267,47 @@ export function ScanPage() {
     setBusy(true);
     clearOutcome();
     setSubmittedContext(context);
-    try {
-      const inference = await inferencePredict(file, modelId);
-      setResult(inference);
 
-      // Persist the scan together with its clinical context. A save failure
-      // must not hide a valid inference result.
-      try {
-        const scan = await createScan(modelId, context);
-        await submitScanResult(scan.id, {
-          modelId: inference.model,
-          label: inference.label,
-          confidence: inference.confidence,
-          scores: inference.scores,
-        });
-        setSavedScanId(scan.id);
-        await queryClient.invalidateQueries({ queryKey: ["scans"] });
-      } catch (saveErr) {
-        setSaveWarning(
-          `Result generated, but saving to the server failed: ${
-            saveErr instanceof Error ? saveErr.message : "unknown error"
-          }`,
-        );
-      }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const inference = await inferencePredict(file, modelId, true, controller.signal);
+      setResult(inference);
+      setBusy(false);
+      setCopySuccess(false);
+
+      void (async () => {
+        try {
+          const scan = await createScan(modelId, context);
+          await submitScanResult(scan.id, {
+            modelId: inference.model,
+            label: inference.label,
+            confidence: inference.confidence,
+            scores: inference.scores,
+          });
+          setSavedScanId(scan.id);
+          await queryClient.invalidateQueries({ queryKey: ["scans"] });
+        } catch (saveErr) {
+          setSaveWarning(
+            `Result generated, but saving to the server failed: ${
+              saveErr instanceof Error ? saveErr.message : "unknown error"
+            }`,
+          );
+        }
+      })();
     } catch (err) {
-      if (err instanceof RejectedInferenceError) {
+      setBusy(false);
+      if (controller.signal.aborted) {
+        setError(
+          "The request timed out after 60 seconds — the inference service may be busy. Please retry.",
+        );
+      } else if (err instanceof RejectedInferenceError) {
         setRejection(err.rejection);
       } else {
         setError(err instanceof Error ? err.message : "Prediction failed");
       }
     } finally {
-      setBusy(false);
+      window.clearTimeout(timer);
     }
   }
 
@@ -136,7 +316,7 @@ export function ScanPage() {
     setReportBusy(true);
     setReportError(null);
     try {
-      const { blob, filename } = await downloadReportPdf(file, {
+      const payload: ReportPayload = {
         modelId: result.model,
         label: result.label,
         confidence: result.confidence,
@@ -148,7 +328,8 @@ export function ScanPage() {
         clinicalContext: submittedContext,
         scanId: savedScanId ?? undefined,
         lowConfidenceDomain: result.low_confidence_domain,
-      });
+      };
+      const { blob, filename } = await downloadReportPdf(file, payload);
       saveBlob(blob, filename);
     } catch (err) {
       setReportError(
@@ -159,461 +340,267 @@ export function ScanPage() {
     }
   }
 
-  const activeModel = MODELS.find((m) => m.id === modelId);
-  const domain = activeModel?.domain ?? "chest";
-  const clinicalFields = getClinicalFields(domain);
-  const chestModels = MODELS.filter((m) => m.domain === "chest");
-  const brainModels = MODELS.filter((m) => m.domain === "brain");
-  const lowConfidenceDomain = result?.low_confidence_domain === true;
-  // Use dynamic saliency from API response
-  const saliencyBase64 = result?.saliency_base64 ?? null;
-  // Only use static fallback if it matches the model's domain
-  const saliencyStatic = result && getSaliencyImage(result.model) ? getSaliencyImage(result.model) : null;
-  const isStaticFallbackDomainMismatch = saliencyStatic && domain !== "chest" && result?.model !== "model" && result?.model !== "model_unquant";
-  const interpretation = result ? getClinicalInterpretation(result.model, result.label) : null;
-
-  function renderField(
-    field: (typeof clinicalFields)[number],
-  ) {
-    const value = (answers[field.id] as string | undefined) ?? "";
-    const invalid = Boolean(fieldErrors[field.id]);
-    const baseClass =
-      "w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500";
-    const borderClass = invalid ? "border-red-400" : "border-gray-300";
-
-    return (
-      <div key={field.id}>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          {field.label}
-          {field.required ? <span className="text-red-500"> *</span> : null}
-        </label>
-        {field.type === "number" ? (
-          <input
-            type="number"
-            value={value}
-            min={field.min}
-            max={field.max}
-            onChange={(e) => onAnswer(field.id, e.target.value)}
-            className={`${baseClass} ${borderClass}`}
-          />
-        ) : (
-          <select
-            value={value}
-            onChange={(e) => onAnswer(field.id, e.target.value)}
-            className={`${baseClass} ${borderClass}`}
-          >
-            <option value="">Select…</option>
-            {field.type === "boolean"
-              ? [
-                  <option key="yes" value="true">
-                    Yes
-                  </option>,
-                  <option key="no" value="false">
-                    No
-                  </option>,
-                ]
-              : field.options?.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-          </select>
-        )}
-        {fieldErrors[field.id] ? (
-          <p className="mt-1 text-xs text-red-600">{fieldErrors[field.id]}</p>
-        ) : field.help ? (
-          <p className="mt-1 text-xs text-gray-500">{field.help}</p>
-        ) : null}
-      </div>
+  async function onCopyFindings() {
+    if (!result) return;
+    const contextRows = submittedContext
+      ? describeClinicalContext(domain, submittedContext)
+          .map((r) => `${r.label}: ${r.value}`)
+          .join(", ")
+      : null;
+    const lines = [
+      "CARELENS AI — STRUCTURED DICOM FINDINGS",
+      `Model: ${result.model}${result.model_domain ? ` (${result.model_domain})` : ""}`,
+      `Primary impression: ${result.label}`,
+      `Top confidence: ${(result.confidence * 100).toFixed(1)}%`,
+      "Class probability distribution:",
+      ...result.scores.map(
+        (s) => `  - ${s.label}: ${(s.confidence * 100).toFixed(1)}%`,
+      ),
+    ];
+    if (interpretation) {
+      lines.push("Interpretation:", interpretation.meaning);
+      lines.push("Recommended next steps:", ...interpretation.nextSteps.map((s) => `  - ${s}`));
+      lines.push("Red flags / triage indicators:", ...interpretation.redFlags.map((s) => `  - ${s}`));
+    }
+    if (contextRows) lines.push(`Clinical context: ${contextRows}`);
+    lines.push(
+      "Disclaimer: assistive tool output only — confirm findings with formal radiological review.",
     );
+
+    const ok = await copyText(lines.join("\n"));
+    if (ok) {
+      setCopySuccess(true);
+      window.setTimeout(() => setCopySuccess(false), 2400);
+    } else {
+      setReportError("Clipboard access was denied. Copy the assembled text manually.");
+    }
   }
 
-  return (
-    <section className="max-w-lg space-y-4">
-      <header>
-        <h1 className="text-2xl font-semibold text-gray-900">Scan</h1>
-        <p className="text-sm text-gray-500">
-          Classify an image with a CareLens model.
+  function onEscalate(payload: EscalationAck) {
+    setEscalateOpen(false);
+    setEscalationAck(payload);
+    window.setTimeout(() => setEscalationAck(null), 5200);
+  }
+
+  function onResetStudy() {
+    if (preview) URL.revokeObjectURL(preview);
+    setFile(null);
+    setPreview(null);
+    setModelId(DEFAULT_MODEL_ID);
+    setAnswers(emptyClinicalAnswers("chest"));
+    setFieldErrors({});
+    clearOutcome();
+    resetViewport();
+  }
+
+  const viewport = (
+    <DiagnosticViewport
+      preview={preview}
+      saliencyBase64={saliencyBase64}
+      isLoading={busy}
+      loadingStage={telemetryStage}
+      stageLabels={stageLabels}
+      gatingStatus={gatingStatus}
+      saliencyOpacity={saliencyOpacity}
+      onSaliencyOpacityChange={setSaliencyOpacity}
+      viewMode={viewMode}
+      onViewModeChange={setViewMode}
+      thresholdSpotlight={thresholdSpotlight}
+      onThresholdSpotlightChange={setThresholdSpotlight}
+      invertContrast={invertContrast}
+      onInvertContrastChange={setInvertContrast}
+      zoom={zoom}
+      onZoomChange={setZoom}
+      pan={pan}
+      onPanChange={setPan}
+      windowLevel={windowLevel}
+      onWindowLevelChange={setWindowLevel}
+    />
+  );
+
+  const scanNotes = (
+    <>
+      {result && !saliencyBase64 && (
+        <p className="rounded-lg border border-warn/40 bg-[#fdf3e0] px-3 py-2 text-xs text-[#8a5a10]">
+          Dynamic occlusion saliency
+          {result.saliency_error ? ` (${result.saliency_error})` : ""} is
+          unavailable for this study. Showing the raw scan only.
         </p>
-      </header>
-
-      <form
-        onSubmit={onPredict}
-        className="space-y-4 rounded-xl border border-gray-200 bg-white p-6"
-      >
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Model
-          </label>
-          <select
-            value={modelId}
-            onChange={(e) => onSelectModel(e.target.value)}
-            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-          >
-            <optgroup label="Chest X-ray">
-              {chestModels.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.id} ({m.file})
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label="Brain MRI">
-              {brainModels.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.id} ({m.file})
-                </option>
-              ))}
-            </optgroup>
-          </select>
-          {activeModel && (
-            <p className="mt-1 text-xs text-gray-500">
-              Domain: {CLINICAL_DOMAIN_LABELS[activeModel.domain]} · File:{" "}
-              {activeModel.file} · Output classes:{" "}
-              {activeModel.classLabels.join(", ")} · Measured accuracy:{" "}
-              {activeModel.accuracy}
-            </p>
-          )}
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Image
-          </label>
-          <input
-            type="file"
-            accept="image/*"
-            onChange={onFile}
-            className="w-full text-sm"
-          />
-          {preview && (
-            <img
-              src={preview}
-              alt="Scan preview"
-              className="mt-3 max-h-56 rounded-lg border border-gray-200"
-            />
-          )}
-        </div>
-
-        <fieldset className="space-y-3 border-t border-gray-100 pt-4">
-          <legend className="text-sm font-semibold text-gray-900">
-            {CLINICAL_DOMAIN_LABELS[domain]} clinical context
-          </legend>
-          <p className="text-xs text-gray-500">{CLINICAL_CONTEXT_DISCLAIMER}</p>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {clinicalFields.map(renderField)}
-          </div>
-        </fieldset>
-
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        {saveWarning && <p className="text-sm text-amber-600">{saveWarning}</p>}
-
-        <button
-          type="submit"
-          disabled={!file || busy}
-          className="w-full rounded-md bg-teal-600 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-40"
-        >
-          {busy ? "Classifying…" : "Run classification"}
-        </button>
-      </form>
-
-      {rejection && (
-        <div
-          className={
-            rejection.code === "NOT_A_MEDICAL_IMAGE"
-              ? "rounded-xl border border-red-300 bg-red-50 p-6"
-              : "rounded-xl border border-amber-300 bg-amber-50 p-6"
-          }
+      )}
+      {result && saliencyBase64 && domain === "chest" && result.model !== "pneumonia" && (
+        <p className="rounded-lg border border-warn/40 bg-[#fdf3e0] px-3 py-2 text-xs text-[#8a5a10]">
+          Note: legacy chest models do NOT reliably localize lung fields
+          (validation findings, PRODUCT.md §8.4).
+        </p>
+      )}
+      {saveWarning && (
+        <p
           role="alert"
+          className="rounded-lg border border-critical/30 bg-[#fdeef1] px-3 py-2 text-xs text-critical"
         >
-          <p className="text-sm font-semibold text-gray-900">
-            {rejection.code === "NOT_A_MEDICAL_IMAGE"
-              ? "Not a medical image"
-              : "Wrong model for this image"}
-          </p>
-          <p className="mt-1 text-sm text-gray-700">{rejection.message}</p>
-          {rejection.suggested_models &&
-            rejection.suggested_models.length > 0 && (
-              <div className="mt-3">
-                <p className="text-xs font-medium text-gray-600">
-                  Try a model for this image:
-                </p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {rejection.suggested_models.map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => onSelectModel(id)}
-                      className="rounded-md border border-amber-400 bg-white px-3 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
-                    >
-                      Use {id}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          <p className="mt-3 text-xs text-gray-500">
-            No prediction was made.
-          </p>
-        </div>
+          {saveWarning}
+        </p>
       )}
+    </>
+  );
 
-      {result && (
-        <div className="rounded-xl border border-gray-200 bg-white p-6 space-y-6">
-          {lowConfidenceDomain && (
-            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3" role="alert">
-              <p className="text-sm font-semibold text-amber-800 flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                Body part could not be confirmed
-              </p>
-              <p className="mt-1 text-xs text-amber-700">
-                This image looks like a medical scan but the body part is ambiguous, so the result below may be unreliable.
-              </p>
-            </div>
-          )}
+  return (
+    <div className="space-y-5">
+      <ScanPageHeader busy={busy} result={result} rejection={rejection} onResetStudy={onResetStudy} />
 
-          {/* Model & Verdict Header */}
-          <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900">Classification Result</h2>
-                <p className="mt-1 text-xs text-gray-500">
-                  Model: <span className="font-mono text-teal-700">{result.model}</span>
-                  {result.model_domain && (
-                    <> · Domain: <span className="capitalize">{result.model_domain}</span></>
-                  )}
-                </p>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="text-right">
-                  <p className="text-2xl font-bold text-gray-900">{result.label}</p>
-                  <p className="text-sm text-gray-500">
-                    Confidence: <span className="font-medium">{(result.confidence * 100).toFixed(1)}%</span>
-                  </p>
-                </div>
-                <div className="w-px h-10 bg-gray-200 sm:w-px sm:h-10 hidden sm:block" />
-                <div className="text-center">
-                  <p className="text-xs text-gray-400 uppercase tracking-wide">Model Accuracy</p>
-                  <p className="text-sm font-medium text-teal-700">{result.accuracy ?? "N/A"}</p>
-                </div>
-              </div>
-            </div>
-          </div>
+      <ScanTabs active={tab} onChange={setTab} />
 
-          {/* Class Probabilities */}
-          <div className="rounded-lg border border-gray-100 bg-white p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Class Probabilities</h3>
-            <ul className="space-y-3">
-              {result.scores.map((s) => (
-                <li key={s.label} className="text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-gray-700 font-medium min-w-[140px]">{s.label}</span>
-                    <span className="text-gray-500 font-mono text-right w-16">
-                      {(s.confidence * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="mt-1.5 h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
-                    <div
-                      className="h-full rounded-full transition-all duration-300"
-                      style={{
-                        width: `${Math.max(0, Math.min(100, s.confidence * 100))}%`,
-                        backgroundColor: s.confidence === result.confidence ? "#0d9488" : "#94a3b8",
-                      }}
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* Saliency Map / Heatmap - Dynamic from API (user's uploaded image) or static fallback */}
-          {saliencyBase64 && (
-            <div className="rounded-lg border border-gray-100 bg-white p-4">
-              <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <svg className="w-4 h-4 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                </svg>
-                Saliency Map (Occlusion Sensitivity)
-              </h3>
-              <p className="text-xs text-gray-500 mb-3">
-                Heatmap showing which image regions most influenced the model's decision on <strong>your uploaded image</strong>.
-                Brighter areas = higher importance. Generated via 16×16 occlusion patches on the fly.
-              </p>
-              <div className="relative aspect-square max-w-md mx-auto rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
-                <img
-                  src={`data:image/png;base64,${saliencyBase64}`}
-                  alt={`Dynamic saliency heatmap for ${result?.model} on your image (top class: ${result?.saliency_top_class})`}
-                  className="w-full h-full object-cover"
-                />
-              </div>
-              <p className="mt-2 text-xs text-teal-600">
-                ✓ Generated dynamically on your uploaded image
-              </p>
-              {domain === "chest" && (
-                <p className="mt-1 text-xs text-amber-600">
-                  Note: Chest models do NOT reliably localize lung fields. See validation findings (PRODUCT.md §8.4).
-                </p>
-              )}
-              {domain === "brain" && (
-                <p className="mt-1 text-xs text-amber-600">
-                  Note: Tutorial-grade model weights may not reliably localize pathology boundaries.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Static fallback - only show if domain matches (chest models only) */}
-          {saliencyStatic && !saliencyBase64 && domain === "chest" && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-              <h3 className="text-sm font-semibold text-amber-800 mb-3 flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                Saliency Map (Pre-generated Reference)
-              </h3>
-              <p className="text-xs text-amber-700 mb-3">
-                Dynamic heatmap generation failed: {result?.saliency_error ?? "unknown"}.
-                Showing pre-generated reference heatmap for a <strong>chest X-ray</strong> (not your image).
-              </p>
-              <div className="relative aspect-square max-w-md mx-auto rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
-                <img
-                  src={saliencyStatic}
-                  alt={`Static saliency heatmap for ${result?.model} model (reference chest X-ray)`}
-                  className="w-full h-full object-cover"
-                />
-              </div>
-              <p className="mt-1 text-xs text-amber-600">
-                Note: Chest models do NOT reliably localize lung fields. See validation findings (PRODUCT.md §8.4).
-              </p>
-            </div>
-          )}
-
-          {/* Brain model fallback - show original image with warning instead of chest heatmap */}
-          {!saliencyBase64 && domain === "brain" && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-              <h3 className="text-sm font-semibold text-amber-800 mb-3 flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                Saliency Map Unavailable
-              </h3>
-              <p className="text-xs text-amber-700 mb-3">
-                Dynamic heatmap generation failed: {result?.saliency_error ?? "unknown"}.
-                No brain MRI reference heatmap available.
-              </p>
-              <div className="relative aspect-square max-w-md mx-auto rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
-                {preview && (
-                  <img
-                    src={preview}
-                    alt="Your uploaded brain MRI"
-                    className="w-full h-full object-cover opacity-75"
+      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <section className="min-w-0 space-y-4">
+          {tab === "overview" ? (
+            <>
+              {viewport}
+              {scanNotes}
+              {busy ? (
+                <div className="card p-5">
+                  <TelemetryProgress
+                    stages={TELEMETRY_STAGES}
+                    currentStage={telemetryStage}
+                    isActive
+                    stageProgress={stageProgress}
                   />
-                )}
-              </div>
-              <p className="mt-2 text-xs text-amber-600">
-                Showing your uploaded brain MRI above. Dynamic occlusion sensitivity unavailable for this model.
-              </p>
-            </div>
-          )}
-
-          {/* Clinical Interpretation */}
-          {interpretation && (
-            <div className="rounded-lg border border-teal-100 bg-teal-50 p-4">
-              <h3 className="text-sm font-semibold text-teal-800 mb-3 flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                </svg>
-                Clinical Interpretation: {result.label}
-              </h3>
-              <p className="text-sm text-teal-700 mb-3">{interpretation.meaning}</p>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-md bg-white p-3 border border-teal-100">
-                  <h4 className="text-xs font-semibold text-teal-800 uppercase tracking-wide mb-2">Suggested Next Steps</h4>
-                  <ul className="space-y-1 text-xs text-teal-700">
-                    {interpretation.nextSteps.map((step, i) => (
-                      <li key={i} className="flex gap-1">
-                        <span className="text-teal-500">→</span>
-                        <span>{step}</span>
-                      </li>
-                    ))}
-                  </ul>
                 </div>
+              ) : rejection ? (
+                <RejectionPanel rejection={rejection} onSelectModel={onSelectModel} onReset={onResetStudy} />
+              ) : result ? (
+                <OverviewResultCard
+                  result={result}
+                  interpretation={interpretation}
+                  onOpenFindings={() => setTab("findings")}
+                  onExportPdf={onDownloadReport}
+                  reportBusy={reportBusy}
+                  onEscalate={() => setEscalateOpen(true)}
+                />
+              ) : (
+                <StudySetupPanel
+                  models={MODELS}
+                  modelId={modelId}
+                  onSelectModel={onSelectModel}
+                  domain={domain}
+                  fields={clinicalFields}
+                  answers={answers}
+                  fieldErrors={fieldErrors}
+                  onAnswer={onAnswer}
+                  preview={preview}
+                  onFileChange={onFileChange}
+                  onFileDrop={onFileDrop}
+                  onClearFile={onClearFile}
+                  error={error}
+                  busy={busy}
+                  onSubmit={onRunAnalysis}
+                />
+              )}
+            </>
+          ) : null}
 
-                <div className="rounded-md bg-white p-3 border border-red-100">
-                  <h4 className="text-xs font-semibold text-red-800 uppercase tracking-wide mb-2">Red Flags / Considerations</h4>
-                  <ul className="space-y-1 text-xs text-red-700">
-                    {interpretation.redFlags.map((flag, i) => (
-                      <li key={i} className="flex gap-1">
-                        <span className="text-red-500">⚠</span>
-                        <span>{flag}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
+          {tab === "images" ? (
+            <>
+              {viewport}
+              {scanNotes}
+              {!preview && !result ? (
+                <EmptyState
+                  icon={<Scan className="h-5 w-5" />}
+                  title="No study images yet"
+                  body="Scans are not archived on the server. Go to the Overview tab and start a study to inspect an image here."
+                />
+              ) : null}
+            </>
+          ) : null}
 
-          {/* Clinical Context */}
-          {submittedContext && (
-            <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-              <h3 className="text-sm font-semibold text-gray-900 mb-3">
-                {CLINICAL_DOMAIN_LABELS[domain]} Clinical Context
-              </h3>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-                {describeClinicalContext(domain, submittedContext).map((row) => (
-                  <div key={row.id} className="flex justify-between gap-2">
-                    <dt className="text-gray-500">{row.label}</dt>
-                    <dd className="text-gray-800 font-medium">{row.value}</dd>
-                  </div>
-                ))}
-              </dl>
-              <p className="mt-2 text-xs text-gray-400">{CLINICAL_CONTEXT_DISCLAIMER}</p>
-            </div>
-          )}
-
-          {/* Technical Details */}
-          <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-            <p className="text-xs text-gray-400 font-mono">
-              Input: {result.input_shape.join("×")} {result.input_dtype}
-              {result.preprocessing ? ` · Preprocessing: ${result.preprocessing}` : ""}
-              {result.accuracy ? ` · Measured accuracy: ${result.accuracy}` : ""}
-            </p>
-            <p className="mt-1 text-xs font-medium text-amber-600">
-              {result.disclaimer ?? MODEL_DISCLAIMER}
-            </p>
-          </div>
-
-          {/* Report Download */}
-          <button
-            type="button"
-            onClick={onDownloadReport}
-            disabled={reportBusy}
-            className="w-full rounded-md bg-teal-600 py-2.5 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-40 transition-colors"
-          >
-            {reportBusy ? (
-              <span className="flex items-center justify-center gap-2">
-                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Preparing report…
-              </span>
+          {tab === "findings" ? (
+            result ? (
+              <ClinicalSummaryCard
+                result={result}
+                interpretation={interpretation}
+                submittedContext={submittedContext}
+                domain={domain}
+              />
             ) : (
-              "Download Report (PDF)"
-            )}
-          </button>
-          <p className="mt-1 text-center text-xs text-gray-400">
-            Includes the image, verdict, clinical context, saliency map, and AI-drafted guidance.
-          </p>
-          {reportError && (
-            <p className="mt-2 text-xs text-red-600 text-center">{reportError}</p>
-          )}
-        </div>
-      )}
-    </section>
+              <EmptyState
+                icon={<Activity className="h-5 w-5" />}
+                title="No findings yet"
+                body="Run a study from the Overview tab. The model's class distribution, interpretation, and care pathway will appear here."
+              />
+            )
+          ) : null}
+
+          {tab === "ai-analysis" ? (
+            result ? (
+              <AIAnalysisPanel result={result} model={activeModel} domain={domain} />
+            ) : (
+              <EmptyState
+                icon={<BrainCircuit className="h-5 w-5" />}
+                title="No AI analysis yet"
+                body="The model card, domain-gate verdict, and saliency status unlock here once a study completes."
+              />
+            )
+          ) : null}
+
+          {tab === "report" ? (
+            result ? (
+              <ReportPanel
+                result={result}
+                interpretation={interpretation}
+                submittedContext={submittedContext}
+                domain={domain}
+                savedScanId={savedScanId}
+                reportBusy={reportBusy}
+                reportError={reportError}
+                onExportPdf={onDownloadReport}
+                onCopyFindings={onCopyFindings}
+                onEscalate={() => setEscalateOpen(true)}
+              />
+            ) : (
+              <EmptyState
+                icon={<FileText className="h-5 w-5" />}
+                title="No report to assemble"
+                body="Export a structured PDF or copy findings once a study has completed."
+              />
+            )
+          ) : null}
+        </section>
+
+        <PatientRail
+          user={user}
+          submittedContext={submittedContext}
+          domain={domain}
+          result={result}
+          interpretation={interpretation}
+          scans={scansData?.scans}
+          scansLoading={scansLoading}
+          savedScanId={savedScanId}
+          reportBusy={reportBusy}
+          onExportPdf={onDownloadReport}
+          onCopyFindings={onCopyFindings}
+          onEscalate={() => setEscalateOpen(true)}
+          onNewStudy={onResetStudy}
+        />
+      </div>
+
+      <EscalateModal open={escalateOpen} onClose={() => setEscalateOpen(false)} onSubmit={onEscalate} />
+
+      <AnimatePresence>
+        {copySuccess && (
+          <div className="fixed bottom-6 right-6 z-50">
+            <Toast tone="success" title="Findings copied" body="Structured findings are on your clipboard." />
+          </div>
+        )}
+        {escalationAck && (
+          <div className="fixed bottom-6 right-6 z-50">
+            <Toast
+              tone="info"
+              icon={<Send className="h-4 w-4" />}
+              title="Escalation queued for senior over-read"
+              body={`Urgency: ${escalationAck.urgency} · ${escalationAck.reason}`}
+            />
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

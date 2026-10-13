@@ -389,6 +389,7 @@ def predict(
     result["preprocessing"] = "pixel / 127.5 - 1 ([-1,1])"
     result["accuracy"] = spec["accuracy"]
     result["disclaimer"] = spec["disclaimer"]
+    result["status_badge"] = spec.get("status_badge", "")
     result["model_domain"] = model_domain
     result["input_analysis"] = result_validation
     if detected_domain == "unknown":

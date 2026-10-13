@@ -1,18 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
-import { apiPaths } from "@carelens/shared";
+import { Activity, CheckCircle2, ScanLine, TriangleAlert } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { describeClinicalContext, getModelDomain } from "@carelens/ml";
-import { apiFetch } from "../lib/api";
-
-interface ScansResponse {
-  scans: Array<{
-    id: string;
-    modelId: string;
-    status: string;
-    clinicalContext?: Record<string, unknown> | null;
-    createdAt: string;
-  }>;
-  counts: { total: number; completed: number; failed: number };
-}
+import { Card, CardHeader, EmptyState, ErrorState, LoadingState } from "../components/ui";
+import { useScans } from "../hooks/useScansSearch";
 
 function contextSummary(
   modelId: string,
@@ -29,79 +19,101 @@ function contextSummary(
 }
 
 export function DashboardPage() {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["scans"],
-    queryFn: () => apiFetch<ScansResponse>(apiPaths.scans),
-  });
+  const { data, isLoading, error, refetch } = useScans();
+  const [params] = useSearchParams();
+  const highlightId = params.get("scan");
 
-  if (isLoading) return <p className="text-sm text-gray-500">Loading…</p>;
+  if (isLoading) return <LoadingState label="Loading dashboard…" />;
   if (error)
     return (
-      <p className="text-sm text-red-600">
-        Failed to load dashboard: {String((error as Error).message)}
-      </p>
+      <ErrorState
+        message={String((error as Error).message)}
+        onRetry={() => void refetch()}
+      />
     );
 
   const counts = data?.counts ?? { total: 0, completed: 0, failed: 0 };
+  const stats = [
+    { label: "Total scans", value: counts.total, icon: ScanLine, tone: "text-primary bg-primary-soft" },
+    { label: "Completed", value: counts.completed, icon: CheckCircle2, tone: "text-success bg-[#e6f6f4]" },
+    { label: "Failed", value: counts.failed, icon: TriangleAlert, tone: "text-critical bg-[#fdeef1]" },
+  ];
 
   return (
     <section className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold text-gray-900">Dashboard</h1>
-        <p className="text-sm text-gray-500">
-          High-level overview of scans and activity.
+        <h1 className="text-2xl font-semibold text-navy">Dashboard</h1>
+        <p className="mt-1 text-sm text-muted">
+          High-level overview of scans and clinical activity.
         </p>
       </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {[
-          { label: "Total scans", value: counts.total },
-          { label: "Completed", value: counts.completed },
-          { label: "Failed", value: counts.failed },
-        ].map((c) => (
-          <div
-            key={c.label}
-            className="rounded-xl border border-gray-200 bg-white p-5"
-          >
-            <p className="text-sm text-gray-500">{c.label}</p>
-            <p className="mt-1 text-2xl font-bold text-gray-900">{c.value}</p>
-          </div>
-        ))}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {stats.map((c) => {
+          const Icon = c.icon;
+          return (
+            <Card key={c.label} className="card-pad flex items-center gap-4">
+              <span className={`flex h-11 w-11 items-center justify-center rounded-xl ${c.tone}`}>
+                <Icon className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-sm text-muted">{c.label}</p>
+                <p className="mt-0.5 text-2xl font-bold text-navy">{c.value}</p>
+              </div>
+            </Card>
+          );
+        })}
       </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-200">
-          <h2 className="text-sm font-medium text-gray-900">Recent scans</h2>
-        </div>
+      <Card className="overflow-hidden">
+        <CardHeader
+          icon={<Activity className="h-4 w-4" />}
+          title="Recent scans"
+          subtitle="Saved on the server — images are not archived."
+        />
         {data?.scans.length ? (
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left text-gray-500">
-              <tr>
-                <th className="px-5 py-2 font-medium">Model</th>
-                <th className="px-5 py-2 font-medium">Context</th>
-                <th className="px-5 py-2 font-medium">Status</th>
-                <th className="px-5 py-2 font-medium">Created</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {data.scans.map((s) => (
-                <tr key={s.id}>
-                  <td className="px-5 py-2 font-mono text-xs">{s.modelId}</td>
-                  <td className="px-5 py-2 text-xs text-gray-500">
-                    {contextSummary(s.modelId, s.clinicalContext)}
-                  </td>
-                  <td className="px-5 py-2">{s.status}</td>
-                  <td className="px-5 py-2 text-gray-500">
-                    {new Date(s.createdAt).toLocaleString()}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-surface-2 text-left text-muted">
+                <tr>
+                  <th className="px-5 py-2.5 font-medium">Model</th>
+                  <th className="px-5 py-2.5 font-medium">Context</th>
+                  <th className="px-5 py-2.5 font-medium">Status</th>
+                  <th className="px-5 py-2.5 font-medium">Created</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {data.scans.map((s) => (
+                  <tr
+                    key={s.id}
+                    className={
+                      s.id === highlightId
+                        ? "bg-primary-soft"
+                        : "transition-colors hover:bg-surface-2"
+                    }
+                  >
+                    <td className="px-5 py-2.5 font-mono text-xs text-navy">{s.modelId}</td>
+                    <td className="px-5 py-2.5 text-xs text-muted">
+                      {contextSummary(s.modelId, s.clinicalContext)}
+                    </td>
+                    <td className="px-5 py-2.5 text-navy">{s.status}</td>
+                    <td className="px-5 py-2.5 text-muted">
+                      {new Date(s.createdAt).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
-          <p className="px-5 py-6 text-sm text-gray-500">No scans yet.</p>
+          <EmptyState
+            icon={<ScanLine className="h-5 w-5" />}
+            title="No scans yet"
+            body="Run an analysis from the Scan workspace to populate this list."
+            className="m-5 border-0 bg-transparent"
+          />
         )}
-      </div>
+      </Card>
     </section>
   );
 }

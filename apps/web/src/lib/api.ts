@@ -86,6 +86,31 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
+export interface AccessTokenPayload {
+  sub?: string;
+  email?: string;
+  role?: string;
+}
+
+/**
+ * Decodes the (unverified) access-token payload so the UI can show the signed-in
+ * user's identity and role. Never used for authorization — the API re-verifies
+ * every request.
+ */
+export function getAccessTokenPayload(): AccessTokenPayload | null {
+  if (!accessToken) return null;
+  const parts = accessToken.split(".");
+  const segment = parts[1];
+  if (parts.length !== 3 || !segment) return null;
+  try {
+    const base64 = segment.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    return JSON.parse(atob(padded)) as AccessTokenPayload;
+  } catch {
+    return null;
+  }
+}
+
 /** Logged in if we hold either token (an expired access token can be refreshed). */
 export function isAuthenticated(): boolean {
   return Boolean(accessToken || refreshToken);
@@ -265,6 +290,7 @@ export interface InferenceResult {
   input_dtype: string;
   preprocessing?: string;
   accuracy?: string;
+  status_badge?: string;
   disclaimer?: string;
   input_analysis?: ImageValidation;
   low_confidence_domain?: boolean;
@@ -277,6 +303,7 @@ export async function inferencePredict(
   file: File,
   modelId: string,
   generateSaliency = true,
+  signal?: AbortSignal,
 ): Promise<InferenceResult> {
   const body = new FormData();
   body.append("file", file);
@@ -285,6 +312,7 @@ export async function inferencePredict(
   const res = await fetch(`${INFERENCE_URL}/predict`, {
     method: "POST",
     body,
+    signal,
   });
   if (!res.ok) {
     if (res.status === 422) {
