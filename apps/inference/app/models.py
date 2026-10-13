@@ -35,11 +35,11 @@ MODELS: dict[str, ModelSpec] = {
         "disclaimer": DISCLAIMER,
     },
     "pneumonia": {
-        "file": "newPneumoniaModel.tflite",
+        "file": "newPneumoniaModel_v2.tflite",
         "domain": "chest",
-        "labels": ["NORMAL", "BACTERIAL_PNEUMONIA", "VIRAL_PNEUMONIA"],
+        "labels": ["NORMAL", "PNEUMONIA"],
         "input_shape": [1, 224, 224, 3],
-        "accuracy": "~40% measured (near chance)",
+        "accuracy": "ImageNet-pretrained DenseNet121 baseline (requires CheXpert fine-tuning for clinical accuracy)",
         "disclaimer": DISCLAIMER,
     },
     "model": {

@@ -70,11 +70,15 @@ def _generate_saliency(
         return arr[None, ...]
 
     def get_probs(rgb: np.ndarray) -> np.ndarray:
-        """Run inference on uint8 RGB image, return probabilities."""
+        """Run inference on uint8 RGB image, return probabilities [NORMAL, PNEUMONIA]."""
         tensor = preprocess(rgb)
         interp.set_tensor(input_details["index"], tensor)
         interp.invoke()
         out = interp.get_tensor(output_details["index"]).flatten().astype(np.float64)
+        # Handle binary sigmoid output (single value) -> convert to [normal, pneumonia]
+        if out.shape == (1,):
+            p = float(out[0])
+            return np.array([1.0 - p, p], dtype=np.float64)
         if out.min() < 0 or abs(out.sum() - 1.0) > 0.01:
             out = out - out.max()
             e = np.exp(out)
@@ -221,13 +225,24 @@ def _preprocess(image: Image.Image, input_details: dict[str, Any]) -> np.ndarray
 
 def _postprocess(output_tensor: np.ndarray, labels: list[str], model_id: str) -> dict[str, Any]:
     flat = np.asarray(output_tensor).flatten()
-    if flat.size != len(labels):
+    
+    # Handle binary classification with single sigmoid output (pneumonia probability)
+    if flat.size == 1 and len(labels) == 2:
+        pneumonia_prob = float(flat[0])
+        normal_prob = 1.0 - pneumonia_prob
+        scores = [normal_prob, pneumonia_prob]
+    elif flat.size != len(labels):
         # Shape mismatch: keep the tensor details so we can reconcile the
         # TS manifest, but still emit a best-effort result.
         flat = flat[: len(labels)] if flat.size >= len(labels) else list(flat) + [0.0] * (len(labels) - flat.size)
-    scores = list(map(float, flat))
-    if any(v < 0 for v in scores) and all(abs(v) <= 1e6 for v in scores):
-        scores = model_registry.softmax(scores)
+        scores = list(map(float, flat))
+        if any(v < 0 for v in scores) and all(abs(v) <= 1e6 for v in scores):
+            scores = model_registry.softmax(scores)
+    else:
+        scores = list(map(float, flat))
+        if any(v < 0 for v in scores) and all(abs(v) <= 1e6 for v in scores):
+            scores = model_registry.softmax(scores)
+
     ranked = sorted(zip(labels, scores), key=lambda kv: kv[1], reverse=True)
     best_label, best_conf = ranked[0]
     return {

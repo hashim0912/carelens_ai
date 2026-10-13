@@ -1,5 +1,5 @@
 ﻿{
-    "source":  "extracted from decompiled CareLens/Vital Scan APK (Desktop\\\\ProjectCode\\\\app\\\\src\\\\main\\\\assets\\\\flutter_assets\\\\assets)",
+    "source":  "extracted from decompiled CareLens/Vital Scan APK (Desktop\\\\ProjectCode\\\\app\\\\src\\\\main\\\\assets\\\\flutter_assets\\\\assets); newPneumoniaModel_v2.tflite built from DenseNet121 ImageNet weights",
     "extracted_at":  "2026-10-11T14:30:29.3645559+05:00",
     "integrity":  "sha256 verified against source",
     "models":  [
@@ -32,11 +32,17 @@
                        "size_bytes":  2091132,
                        "sha256":  "35257CFB9B4F073DB1BB388A712A2995A0A2EF864D655BF7659456DABCD1598B",
                        "tflite_version":  "TFL3"
-                   }
+                   },
+{
+    "name":  "newPneumoniaModel_v2.tflite",
+    "size_bytes":  27920592,
+    "sha256":  "6ddc5a92dc19f5b37d413f227fc7e83d692126978239db44991b2606fc5de443",
+    "tflite_version":  "TFL3"
+}
                ],
     "notes":  [
                   "No class labels are embedded in the .tflite files (labels lived in the original Dart source, which is unavailable).",
                   "Input/output tensor shapes will be parsed when the inference service runs these models (P2).",
-                  "Filenames suggest: brain_model.tflite = brain-tumor classifier; newPneumoniaModel.tflite = pneumonia classifier; model/model_unquant/new_model = classifier variants (unquant = float weights)."
+                  "Filenames suggest: brain_model.tflite = brain-tumor classifier; newPneumoniaModel.tflite = pneumonia classifier (legacy); newPneumoniaModel_v2.tflite = DenseNet121 ImageNet-pretrained pneumonia classifier; model/model_unquant/new_model = classifier variants (unquant = float weights)."
               ]
 }

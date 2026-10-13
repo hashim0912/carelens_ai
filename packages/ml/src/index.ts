@@ -46,14 +46,14 @@ export const MODELS: readonly ModelSpec[] = [
   },
   {
     id: "pneumonia",
-    file: "newPneumoniaModel.tflite",
+    file: "newPneumoniaModel_v2.tflite",
     kind: "classification",
     domain: "chest",
     inputShape: [1, 224, 224, 3],
-    outputClasses: 3,
-    classLabels: ["NORMAL", "BACTERIAL_PNEUMONIA", "VIRAL_PNEUMONIA"],
+    outputClasses: 2,
+    classLabels: ["NORMAL", "PNEUMONIA"],
     labelSource: "inferred",
-    accuracy: "~40% measured (near chance)",
+    accuracy: "ImageNet-pretrained DenseNet121 baseline (requires CheXpert fine-tuning for clinical accuracy)",
   },
   {
     id: "model",
@@ -199,30 +199,18 @@ export const CLINICAL_INTERPRETATION: Record<string, Record<string, {
         "Immunocompromised patients may have atypical presentations",
       ],
     },
-    BACTERIAL_PNEUMONIA: {
-      meaning: "Pattern suggestive of bacterial pneumonia (lobar/segmental consolidation).",
+    PNEUMONIA: {
+      meaning: "Pattern suggestive of pneumonia (binary classification).",
       nextSteps: [
-        "Start empiric antibiotics per local guidelines (e.g., beta-lactam + macrolide or respiratory fluoroquinolone)",
-        "Obtain sputum/blood cultures if hospitalized",
-        "Follow up chest X-ray in 4-6 weeks to confirm resolution",
+        "Clinical correlation required - this model cannot distinguish bacterial vs viral",
+        "Obtain labs (CBC, CRP, procalcitonin), blood cultures if admitted",
+        "Empiric antibiotics per severity and local guidelines",
+        "Follow-up imaging in 4-6 weeks",
       ],
       redFlags: [
-        "Sepsis criteria: initiate sepsis protocol immediately",
-        "Pleural effusion on imaging: consider thoracentesis",
-        "Multilobar involvement or rapid progression: ICU evaluation",
-      ],
-    },
-    VIRAL_PNEUMONIA: {
-      meaning: "Pattern suggestive of viral pneumonia (interstitial/bilateral ground-glass).",
-      nextSteps: [
-        "Viral PCR panel (influenza, RSV, COVID-19, etc.)",
-        "Supportive care; antivirals if influenza/COVID-19 confirmed and within window",
-        "Monitor for secondary bacterial superinfection",
-      ],
-      redFlags: [
-        "Hypoxemia requiring supplemental oxygen",
-        "Rapid clinical deterioration - consider bacterial co-infection",
-        "Immunocompromised host - lower threshold for admission",
+        "Model is ImageNet-pretrained baseline - requires CheXpert fine-tuning for clinical accuracy",
+        "Severe sepsis/septic shock criteria: emergent intervention",
+        "Consider TB, fungal, or neoplastic mimics in appropriate contexts",
       ],
     },
   },
